@@ -7,17 +7,44 @@ import time
 from numba import njit
 import sys
 
-m_highliner = 89
-N = 41       # Discretization
-L = 100      # Line length [m]
-rho = 0.1    # Density [kg/m] (main + backup) - Joker + mamba?
-# rho = 0.066  # Density [kg/m] (main + backup) - Y2K
+from dataclasses import dataclass
+from functools import cached_property
+
+m_slackliner = 89  # Mass if slackliner [kg]
+N = 41             # Discretization
+i_slackliner = 20  # id of pt with slackliner hanging/standing
+L = 100            # Line length [m]
+l_leash = 1.3      # Length of leash [m]
+l_leg = 1.1        # Length of legs [m] (until harness connection point)
+rho = 0.1          # Density [kg/m] (main + backup) - Joker + mamba?
+# rho = 0.066      # Density [kg/m] (main + backup) - Y2K
 # rho = 0.0001
-kl = 130*1E3 # Spring constant times length - Joker
-# kl = 500*1E3 # Spring constant times length - Y2K
-l = L/(N-1)  # length of discretized line segment
-m = l*rho    # mass of point
-zeta = 0.5   # Dampening
+kl = 130*1E3       # Spring constant times length - Joker
+kl_leash = 400*1E4 # Spring constant times length - Joker
+# kl = 500*1E3     # Spring constant times length - Y2K
+l = L/(N-1)        # length of discretized line segment
+m = l*rho          # mass of point [kg]
+zeta = 0.5        # Dampening parameter for linear dampening
+
+# Degrees of Freedom handler for ODE
+@dataclass
+class DoFHandler:
+    N_main       : int = N
+    N_slackliner : int = 1
+
+    @cached_property
+    def start_main():
+        return 0
+
+    @cached_property
+    def start_slackliner():
+        return 2*self.N_slackliner
+
+    @cached_property 
+    def offset_velocities():
+        return 2*self.N_main + 2*self.N_slackliner
+
+dofhandler = DoFHandler()
 
 # Adjust tension by adding/decreasing webbing
 # Add by 2m      : w = 2
@@ -121,7 +148,7 @@ def net_force(zim1, zi, zip1, mm):
     return F
 
 @njit
-def rhs_t(t, Z):
+def ODE_rhs(t, Z):
     out = np.zeros(4*N)
 
     out[0:2*N] = Z[2*N:]
@@ -130,7 +157,7 @@ def rhs_t(t, Z):
         if (i < 2 or i >= 2*N-2): continue
 
         if (i == N-1): 
-            mm = m + m_highliner
+            mm = m + m_slackliner
         else:
             mm = m
         
@@ -145,7 +172,7 @@ def rhs_t(t, Z):
     return out
 
 @njit
-def rhs(Z):
+def static_rhs(Z):
     out = np.zeros(2*N)
 
     out[0] = Z[0]             # x0 = 0
@@ -156,8 +183,8 @@ def rhs(Z):
     for i in range(0,2*N,2):
         if (i < 2 or i >= 2*N-2): continue
 
-        if (i == N-1): 
-            mm = m + m_highliner
+        if (i == 2*i_slackliner): 
+            mm = m + m_slackliner
         else:
             mm = m
         
@@ -166,16 +193,16 @@ def rhs(Z):
         zip1 = np.array([Z[i+2], Z[i+3]])
 
         F = net_force(zim1, zi, zip1, mm)
-        out[i] = F[0]/mm   
-        out[i+1] = F[1]/mm 
+        out[i] = F[0]
+        out[i+1] = F[1]
 
     return out
 
-# Initial guess assuming that with weight of the highliner and line in the middle
+# Initial guess assuming that with weight of the slackliner and line in the middle
 # the line will sag to yield a tension of T_kN
-def get_initial_from_tension(T_kN = 2):
+def get_initial_pos_from_tension(T_kN = 2):
     T_kg = 1000.0/9.82 * T_kN
-    mass = m_highliner + rho*L
+    mass = m_slackliner + rho*L
     s = mass * L / (4*T_kg)
     a = -2*s/L
 
@@ -183,14 +210,11 @@ def get_initial_from_tension(T_kN = 2):
     y = np.maximum(x*a, (L-x)*a) 
 
     positions = np.column_stack((x, y)).ravel()
-    velocities = np.zeros_like(positions)
-    
-    Z = np.concatenate((positions, velocities))
 
-    return Z
+    return positions
 
 def get_static_position(pos):
-    sol, info, ier, mesg = fsolve(rhs, pos, full_output=True)
+    sol, info, ier, mesg = fsolve(static_rhs, pos, full_output=True)
     # print("Solution:", sol)
     print("ier:", ier)
     print("Message:", mesg)
@@ -200,27 +224,28 @@ def get_static_position(pos):
 def main():
 
     add_tension(0)
+    print(dofhandler)
     
-    Z = get_initial_from_tension(T_kN = 3)
-    pos = Z[0:2*N]
-    vel = Z[2*N:]
+    pos = get_initial_pos_from_tension(T_kN = 3)
 
-    ax = plot_rope(Z)
+    ax = plot_rope(pos)
     plt.title(f"Initial Guess")
 
     pos = get_static_position(pos)
-    Z = np.concatenate((pos, vel))
     
-    plot_rope(Z, ax = ax, label = 'static pos')
+    plot_rope(pos, ax = ax, label = 'static pos')
     plt.title(f"Tension = {compute_tension(pos)/1000} kN")
     print(f"lowest point: {np.min(pos[1:2*N:2])}")
     print(f"weight of line: {rho*L}")
     plt.show()
 
+    # vel = np.zeros_like(pos)
+    # Z = np.concatenate((pos, vel))
+
     # t0 = 0
     # t1 = 50
 
-    # result = solve_ivp(rhs_t, (t0,t1), Z)
+    # result = solve_ivp(ODE_rhs, (t0,t1), Z)
     # animate_rope(result)
     # Z = result.y[:,-1]
     # plot_rope(Z)
@@ -228,7 +253,7 @@ def main():
     # t0 = 0
     # t1 = 20
 
-    # result = solve_ivp(rhs_t, (t0,t1), Z)
+    # result = solve_ivp(ODE_rhs, (t0,t1), Z)
 
     # print(f"lowest point: {np.min(result.y[1:2*N:2,-1])}")
 
