@@ -15,7 +15,7 @@ detect_collision = True
 
 g = np.array([0, -9.82])
 m_slackliner = 89  # Mass if slackliner [kg]
-N = 31             # Discretization
+N = 101             # Discretization
 i_leashring = int(N/2)  # id of pt with slackliner hanging/standing
 L = 50             # Line length [m]
 l_leash = 1.3      # Length of leash [m]
@@ -143,16 +143,16 @@ def animate_rope(result, skip=50):
     plt.show(block=False)
 
     start_wall = time.perf_counter()
-    start_sim = result.t[0]
+    start_sim = result["t"][0]
 
-    for i in range(0, len(result.t), skip):
-        t = result.t[i]
+    for i in range(0, len(result["t"]), skip):
+        t = result["t"][i]
 
         # Wait until wall clock matches simulation time
         while time.perf_counter() - start_wall < (t - start_sim):
             plt.pause(0.00001)
 
-        Z = result.y[:, i]
+        Z = result["y"][:, i]
 
         x = Z[0:2*N:2]
         y = Z[1:2*N:2]
@@ -177,14 +177,14 @@ def print_stats(result, skip = 1):
     mf_leash = 0
 
     # lowest point
-    lp_start_webbing = np.min(result.y[0:2*N,0])
+    lp_start_webbing = np.min(result["y"][0:2*N,0])
     lp_webbing = 0
 
-    for i in range(0, len(result.t), skip):
+    for i in range(0, len(result["t"]), skip):
     
-        lp_webbing = min(np.min(result.y[0:2*N,i]), lp_webbing)
+        lp_webbing = min(np.min(result["y"][0:2*N,i]), lp_webbing)
 
-        Z = result.y[:,i]
+        Z = result["y"][:,i]
 
         for j in range(0,2*N,2):
             if (j < 2 or j >= 2*N-2): continue
@@ -214,6 +214,51 @@ def print_stats(result, skip = 1):
         f"  Start Webbing: {lp_start_webbing:.2f}\n"
         f"  Webbing:       {lp_webbing:.2f}"
     )
+
+def leash_event(t, Z):
+    if not dofhandler.with_slackliner:
+        return 1.0  # never trigger
+
+    z_ring = Z[2*i_leashring:2*i_leashring + 2]
+
+    i = dofhandler.start_slackliner
+    z_slack = Z[i:i+2]
+
+    dist = np.linalg.norm(z_slack - z_ring)
+
+    return dist - l_leash
+
+def apply_collision(Z):
+    """
+    Applies an inelastic collision between the slackliner
+    and the leash ring.
+    """
+
+    Z = Z.copy()
+
+    ring = i_leashring
+
+    # ring velocity
+    i_ring = dofhandler.offset + 2*ring
+    v_ring = Z[i_ring:i_ring+2]
+
+    # slackliner velocity
+    i_slack = dofhandler.start_slackliner + dofhandler.offset
+    v_slack = Z[i_slack:i_slack+2]
+
+    # momentum-conserving velocity
+    v = (
+        m*v_ring +
+        m_slackliner*v_slack
+    )/(m + m_slackliner)
+
+    Z[i_ring:i_ring+2] = v
+    Z[i_slack:i_slack+2] = v
+
+    return Z
+
+leash_event.terminal = True
+leash_event.direction = 1   # only detect slack -> taut
 
 def ODE_rhs_vectorized(t, Z):
     global last_t, last_update
@@ -275,17 +320,6 @@ def ODE_rhs_vectorized(t, Z):
 
             F[ring-1] += F_leash
 
-            if detect_collision:
-
-                vi = vel[ring]
-                vs = Z[dofhandler.start_slackliner+dofhandler.offset:
-                       dofhandler.start_slackliner+dofhandler.offset+2]
-
-                v = (m*vi + m_slackliner*vs)/(m+m_slackliner)
-
-                Z[dofhandler.offset + 2*ring: dofhandler.offset + 2*ring + 2] = v
-                Z[dofhandler.start_slackliner+dofhandler.offset:
-                  dofhandler.start_slackliner+dofhandler.offset+2] = v
 
     ############################################################
     # Drag + acceleration
@@ -529,6 +563,50 @@ def get_static_position(pos):
     print("Message:", mesg)
     return sol
 
+def integrate_with_collision(y0, t0, tf, **solve_kwargs):
+    """
+    Integrate until tf, allowing one leash collision.
+    """
+
+    sol1 = solve_ivp(
+        ODE_rhs_vectorized,
+        (t0, tf),
+        y0,
+        events=leash_event,
+        **solve_kwargs
+    )
+
+    # No collision
+    if sol1.status != 1:
+        return sol1
+
+    # Event time/state
+    t_hit = sol1.t_events[0][0]
+    y_hit = sol1.y_events[0][0]
+
+    # Update velocities
+    y_after = apply_collision(y_hit)
+
+    # Continue integration
+    sol2 = solve_ivp(
+        ODE_rhs_vectorized,
+        (t_hit, tf),
+        y_after,
+        **solve_kwargs
+    )
+
+    # Concatenate solutions
+    t = np.concatenate([sol1.t, sol2.t[1:]])
+    y = np.hstack([sol1.y, sol2.y[:, 1:]])
+
+    # Optional: return both pieces as well
+    return {
+        "t": t,
+        "y": y,
+        "collision_time": t_hit,
+        "first_leg": sol1,
+        "second_leg": sol2,
+    }
 
 def main():
 
@@ -550,13 +628,18 @@ def main():
     # print("Z:")
     # print(Z)
 
-    result = solve_ivp(ODE_rhs_vectorized, (t0,t1), Z, rtol = 1E-8, atol = 1E-10)
+    result = integrate_with_collision(
+        Z,
+        t0,
+        t1,
+        rtol=1e-8,
+        atol=1e-10,
+    )
     # result = solve_ivp(ODE_rhs, (t0,t1), Z, rtol = 1E-8, atol = 1E-10)
 
-    out = ODE_rhs(0,Z)
     print_stats(result)
 
-    # animate_rope(result)
+    animate_rope(result)
 
 if __name__ == "__main__":
     main()
