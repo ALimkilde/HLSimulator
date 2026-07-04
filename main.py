@@ -1,4 +1,5 @@
 import numpy as np
+import math
 from scipy.integrate import solve_ivp
 from scipy.optimize import fsolve
 import matplotlib.pyplot as plt
@@ -6,13 +7,13 @@ from matplotlib.animation import FuncAnimation
 import time
 from numba import njit
 import sys
-
 from dataclasses import dataclass
 from functools import cached_property
+from tqdm import tqdm
 
 g = np.array([0, -9.82])
 m_slackliner = 89  # Mass if slackliner [kg]
-N = 51             # Discretization
+N = 21             # Discretization
 i_leashring = int(N/2)  # id of pt with slackliner hanging/standing
 L = 50             # Line length [m]
 l_leash = 1.3      # Length of leash [m]
@@ -25,8 +26,19 @@ kl = 130*1E3       # Spring constant times length - Joker
 kl_leash = 400*1E3 # Spring constant times length - Joker
 # kl = 500*1E3     # Spring constant times length - Y2K
 l = L/(N-1)        # length of discretized line segment
-m = l*rho + (L+3)/(N-1)*rho_backup          # mass of point [kg]
-zeta = 1        # Dampening parameter for linear dampening
+m =  ( L*rho + (L+3)*rho_backup)/(N-2) # mass of point [kg]
+zeta = 0.01        # Dampening parameter for linear dampening
+c = zeta *2*math.sqrt(m*kl/l)
+
+# ODE setting
+t0 = 0
+t1 = 4
+
+# progress bar
+pbar = tqdm(total=t1 - t0, unit = "sim s", unit_scale=False)
+last_t = t0
+last_update = t0
+update_every = 0.01  # simulated seconds
 
 # Degrees of Freedom handler for ODE
 @dataclass
@@ -56,16 +68,12 @@ class DoFHandler:
         else:
             v = np.array([0, -l_leash])
 
-        print(f"pos: {pos}")
-
         pos_leashring = pos[2*i_leashring:2*i_leashring + 2]
 
         if (pos.size <= self.offset):
             pos = np.concatenate((pos, pos_leashring + v))
         elif (pos.size >= self.offset):
             pos[self.start_slackliner: self.start_slackliner+2]  = pos_leashring + v
-
-        print(f"pos: {pos}")
 
         return pos
 
@@ -119,11 +127,11 @@ def plot_rope(Z, ax = None, label = None):
     return ax
 
 
-def animate_rope(result, skip=20):
+def animate_rope(result, skip=50):
     fig, ax = plt.subplots(figsize=(16, 9))
 
-    ax.set_xlim(-0.1 * L, 1.1 * L)
-    ax.set_ylim(-0.2*L, 0.2*L)
+    ax.set_xlim(-0.05 * L, 1.05 * L)
+    ax.set_ylim(-0.2 * L, 0.01 * L)
     ax.set_aspect('equal')
     ax.grid(True)
 
@@ -158,6 +166,53 @@ def animate_rope(result, skip=20):
 
     plt.show()
 
+def print_stats(result, skip = 1):
+
+    #max force in
+    mf_webbing = 0
+    mf_anchor1 = 0
+    mf_anchor2 = 0
+    mf_leash = 0
+
+    # lowest point
+    lp_start_webbing = np.min(result.y[0:2*N,0])
+    lp_webbing = 0
+
+    for i in range(0, len(result.t), skip):
+    
+        lp_webbing = min(np.min(result.y[0:2*N,i]), lp_webbing)
+
+        Z = result.y[:,i]
+
+        for j in range(0,2*N,2):
+            if (j < 2 or j >= 2*N-2): continue
+
+            zi = np.array([Z[j], Z[j+1]])
+            zim1 = np.array([Z[j-2], Z[j-1]])
+            zip1 = np.array([Z[j+2], Z[j+3]])
+
+            mf_webbing = max(mf_webbing, tension(zim1, zi, kl, l))
+
+        
+        if (dofhandler.with_slackliner):
+            jj = dofhandler.start_slackliner
+            zslackliner = Z[jj: jj+2]
+            zleashring = Z[2*i_leashring:2*i_leashring+2]
+
+            mf_leash = max(mf_leash, tension(zleashring, zslackliner, kl_leash, l_leash))
+
+
+    print(
+        f"Max Forces:\n"
+        f"  Webbing:  {mf_webbing:.2f}\n"
+        f"  Anchor 1: {mf_anchor1:.2f}\n"
+        f"  Anchor 2: {mf_anchor2:.2f}\n"
+        f"  Leash:    {mf_leash:.2f}\n\n"
+        f"Lowest Points:\n"
+        f"  Start Webbing: {lp_start_webbing:.2f}\n"
+        f"  Webbing:       {lp_webbing:.2f}"
+    )
+
 
 # Tension of section
 # @njit
@@ -190,6 +245,15 @@ def net_force_mainline(zim1, zi, zip1, mm):
 
 # @njit
 def ODE_rhs(t, Z):
+    global last_t
+    if t > last_t:
+        last_t = t
+
+    global last_update
+    if last_t - last_update >= update_every:
+        pbar.update(last_t - last_update)
+        last_update = last_t
+
     out = np.zeros(2*dofhandler.offset)
 
     out[0:dofhandler.offset] = Z[dofhandler.offset:]
@@ -211,8 +275,9 @@ def ODE_rhs(t, Z):
             # print(f"i: {i}")
             # print(f"Fadded: {tension_force(zslackliner, zi, kl_leash, l_leash)}")
 
-        out[i + dofhandler.offset] = F[0]/m   -zeta/m*Z[i + dofhandler.offset]  # x
-        out[i+1 + dofhandler.offset] = F[1]/m -zeta/m*Z[i+1 + dofhandler.offset]  # y
+        vel_norm = np.linalg.norm(Z[i+dofhandler.offset:i+dofhandler.offset+2])
+        out[i + dofhandler.offset] = F[0]/m   -c*Z[i + dofhandler.offset]*vel_norm  # x
+        out[i+1 + dofhandler.offset] = F[1]/m -c*Z[i+1 + dofhandler.offset]*vel_norm  # y
 
     # Equation for slackliner
     if (dofhandler.with_slackliner):
@@ -222,8 +287,8 @@ def ODE_rhs(t, Z):
 
         F = m_slackliner*g + tension_force(zleashring, zslackliner, kl_leash, l_leash)
 
-        out[i + dofhandler.offset] = F[0]/m_slackliner   -zeta/m_slackliner*Z[i + dofhandler.offset]
-        out[i+1 + dofhandler.offset] = F[1]/m_slackliner -zeta/m_slackliner*Z[i+1 + dofhandler.offset]
+        out[i + dofhandler.offset] = F[0]/m_slackliner   #-c/m_slackliner*Z[i + dofhandler.offset]
+        out[i+1 + dofhandler.offset] = F[1]/m_slackliner #-c/m_slackliner*Z[i+1 + dofhandler.offset]
 
     return out
 
@@ -280,20 +345,16 @@ def get_static_position(pos):
 def main():
 
     add_tension(-1)
-    print(dofhandler)
+    print(f"c: {c}")
     
     pos = get_initial_pos_from_tension(T_kN = 3)
     pos = get_static_position(pos)
 
-    print(f"possize: {pos.size}")
     pos = dofhandler.get_position_line_and_slackliner(pos, walking = True)
-    print(f"possize: {pos.size}")
     
     plot_rope(pos, label = 'static pos')
     plt.title(f"Tension = {compute_tension_mainline(pos)/1000} kN")
-    print(f"lowest point: {np.min(pos[1:2*N:2])}")
-    print(f"weight of line: {m*(N-1)}")
-    # plt.show()
+    print(f"weight of line: {m*(N-2)}")
 
     vel = np.zeros_like(pos)
     Z = np.concatenate((pos, vel))
@@ -304,12 +365,11 @@ def main():
     # print("out:")
     # print(out)
 
-    t0 = 0
-    t1 = 10
+    result = solve_ivp(ODE_rhs, (t0,t1), Z, rtol = 1E-8, atol = 1E-10)
+    print_stats(result)
+    # plt.show()
 
-    result = solve_ivp(ODE_rhs, (t0,t1), Z, rtol = 1E-4, atol = 1E-5)
-    print(f"lowest point: {np.min(result.y[1:2*N:2])}")
-    animate_rope(result)
+    # animate_rope(result)
 
 if __name__ == "__main__":
     main()
