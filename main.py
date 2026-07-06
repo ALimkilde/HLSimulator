@@ -180,22 +180,24 @@ def print_stats(result, skip = 1):
     lp_start_webbing = np.min(result["y"][0:2*N,0])
     lp_webbing = 0
 
-    for i in range(0, len(result["t"]), skip):
-    
+
+    for i in tqdm(range(0, len(result["t"]), skip), desc = "Post processing:"):
+   
         lp_webbing = min(np.min(result["y"][0:2*N,i]), lp_webbing)
 
         Z = result["y"][:,i]
 
-        for j in range(0,2*N,2):
-            if (j < 2 or j >= 2*N-2): continue
+        pos = Z[:2*N].reshape(N, 2)
+        vel = Z[dofhandler.offset:dofhandler.offset+2*N].reshape(N, 2)
 
-            zi = np.array([Z[j], Z[j+1]])
-            zim1 = np.array([Z[j-2], Z[j-1]])
-            zip1 = np.array([Z[j+2], Z[j+3]])
+        # vectors to previous and next nodes
+        d_prev = pos[:-2,:] - pos[1:-1,:]
+        dist_prev = np.linalg.norm(d_prev, axis=1)
+        beta_prev = np.maximum(dist_prev - l, 0.0) / l
+        F_mag_prev = kl * beta_prev[:, None] 
 
-            mf_webbing = max(mf_webbing, tension(zim1, zi, kl, l))
+        mf_webbing = max(mf_webbing, np.max(F_mag_prev))
 
-        
         if (dofhandler.with_slackliner):
             jj = dofhandler.start_slackliner
             zslackliner = Z[jj: jj+2]
@@ -604,8 +606,6 @@ def integrate_with_collision(y0, t0, tf, **solve_kwargs):
         "t": t,
         "y": y,
         "collision_time": t_hit,
-        "first_leg": sol1,
-        "second_leg": sol2,
     }
 
 def main():
@@ -637,9 +637,9 @@ def main():
     )
     # result = solve_ivp(ODE_rhs, (t0,t1), Z, rtol = 1E-8, atol = 1E-10)
 
-    print_stats(result)
+    print_stats(result, skip = 1)
 
-    animate_rope(result)
+    # animate_rope(result)
 
 if __name__ == "__main__":
     main()
