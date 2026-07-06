@@ -12,29 +12,35 @@ from functools import cached_property
 from tqdm import tqdm
 
 detect_collision = True
+break_mainline = True
 
 g = np.array([0, -9.82])
 m_slackliner = 89  # Mass if slackliner [kg]
-N = 21             # Discretization
+N = 101             # Discretization
 i_leashring = int(N/2)  # id of pt with slackliner hanging/standing
-L = 50             # Line length [m]
+L = 60             # Line length [m]
+L_backup = L + 3.5 - 1.25
 l_leash = 1.3      # Length of leash [m]
 l_leg = 1.1        # Length of legs [m] (until harness connection point)
-rho = 0.055        # Density [kg/m] (main + backup) - Joker + mamba?
-rho_backup = 0.050 # Density [kg/m] (main + backup) - Joker + mamba?
-# rho = 0.066      # Density [kg/m] (main + backup) - Y2K
+rho = 0.055        # Density [kg/m] (main) - Joker 
+rho_backup = 0.050 # Density [kg/m] (main) - Mamba
+# rho = 0.033      # Density [kg/m] (main) - Y2K
+# rho_backup = 0.033      # Density [kg/m] (backup) - Y2K
 # rho = 0.0001
-kl = 130*1E3       # Spring constant times length - Joker
-kl_leash = 400*1E3 # Spring constant times length - Joker
+kl = 139*1E3       # Spring constant times length - Joker
+kl_backup = 139*1E3       # Spring constant times length - Solid
+kl_leash = 400*1E3 # Spring constant times length - Leash
 # kl = 500*1E3     # Spring constant times length - Y2K
 l = L/(N-1)        # length of discretized line segment
-m =  ( L*rho + (L+3)*rho_backup)/(N-2) # mass of point [kg]
-zeta = 0.0005        # Dampening parameter for linear dampening
+l_backup = L_backup/(N-1)        # length of discretized line segment
+m =  ( L*rho + L_backup*rho_backup)/(N-2) # mass of point [kg]
+zeta = 0.0055        # Dampening parameter for linear dampening
 c = zeta *2*math.sqrt(m*kl/l)
+cslack = 0.0 #zeta *2*math.sqrt(m*kl/(l*m_slackliner))
 
 # ODE setting
 t0 = 0
-t1 = 5
+t1 = 2
 
 # progress bar
 pbar = tqdm(total=t1 - t0, unit = "sim s", unit_scale=False)
@@ -102,7 +108,7 @@ def compute_tension_mainline(pos):
 
 def plot_rope(Z, ax = None, label = None):
     if (ax is None):
-       fig, ax = plt.subplots(figsize=(16, 9))
+        fig, ax = plt.subplots(figsize=(16, 9))
 
     ax.set_xlim(-0.05 * L, 1.05 * L)
     ax.set_ylim(-0.2 * L, 0.01 * L)
@@ -129,7 +135,7 @@ def plot_rope(Z, ax = None, label = None):
     return ax
 
 
-def animate_rope(result, pp, skip=10):
+def animate_rope(result, pp, skip=500, keep_initial_in_background = True):
     fig, ax = plt.subplots(figsize=(16, 9))
 
     ax.set_xlim(-0.05 * L, 1.05 * L)
@@ -162,11 +168,20 @@ def animate_rope(result, pp, skip=10):
         x = Z[0:2*N:2]
         y = Z[1:2*N:2]
 
+
         line.set_data(x, y)
+        if (pp["backup_activated"][i]):
+            line.set_color('red')
+        else:
+            line.set_color('blue')
 
         xs = [Z[2*i_leashring], Z[dofhandler.start_slackliner]]
         ys = [Z[2*i_leashring+1], Z[dofhandler.start_slackliner+1]]
         line_slackliner.set_data(xs, ys)
+
+        if (i == 0 and keep_initial_in_background):
+            plt.plot(x,y,'--')
+            plt.plot(xs,ys,'--')
 
         ax.set_title(f"t = {t:.1f}s, F_w = {f_w[i]/1000:.1f}kN, F_l = {f_leash[i]/1000:.1f}kN")
         fig.canvas.draw_idle()
@@ -181,6 +196,7 @@ def post_process(result, skip = 1):
     f_anchor1 = np.empty_like(result["t"])
     f_anchor2 = np.empty_like(result["t"])
     f_leash = np.empty_like(result["t"])
+    backup_activated = np.empty_like(result["t"], dtype = bool)
 
     # lowest point
     lp_start_webbing = np.min(result["y"][0:2*N,0])
@@ -188,7 +204,7 @@ def post_process(result, skip = 1):
 
 
     for i in tqdm(range(0, len(result["t"]), skip), desc = "Post processing:"):
-   
+
         lp_webbing = min(np.min(result["y"][0:2*N,i]), lp_webbing)
 
         Z = result["y"][:,i]
@@ -199,12 +215,17 @@ def post_process(result, skip = 1):
         # vectors to previous and next nodes
         d_prev = pos[:-2,:] - pos[1:-1,:]
         dist_prev = np.linalg.norm(d_prev, axis=1)
-        beta_prev = np.maximum(dist_prev - l, 0.0) / l
-        F_mag_prev = kl * beta_prev[:] 
+        if (break_mainline):
+            kl_beta_prev = kl_backup * np.maximum(dist_prev - l_backup, 0.0) / l_backup
+        else:
+            kl_beta_prev = kl * np.maximum(dist_prev - l, 0.0) / l + kl_backup * np.maximum(dist_prev - l_backup, 0.0) / l_backup
+
+        F_mag_prev = kl_beta_prev[:] 
 
         f_webbing[i] = np.max(F_mag_prev)
         f_anchor1[i] = F_mag_prev[0]
         f_anchor2[i] = F_mag_prev[-1]
+        backup_activated[i] = np.any(np.maximum(0.0, dist_prev - l_backup))
 
         if (dofhandler.with_slackliner):
             jj = dofhandler.start_slackliner
@@ -215,14 +236,15 @@ def post_process(result, skip = 1):
 
 
     print(
-        f"Max Forces:\n"
-        f"  Webbing:  {np.max(f_webbing):.2f}\n"
-        f"  Anchor 1: {np.max(f_anchor1):.2f}\n"
-        f"  Anchor 2: {np.max(f_anchor2):.2f}\n"
-        f"  Leash:    {np.max(f_leash):.2f}\n\n"
-        f"Lowest Points:\n"
-        f"  Start Webbing: {lp_start_webbing:.2f}\n"
-        f"  Webbing:       {lp_webbing:.2f}"
+            f"Max Forces:\n"
+            f"  Webbing:  {np.max(f_webbing):.2f}\n"
+            f"  Anchor 1: {np.max(f_anchor1):.2f}\n"
+            f"  Anchor 2: {np.max(f_anchor2):.2f}\n"
+            f"  Leash:    {np.max(f_leash):.2f}\n\n"
+            f"Lowest Points:\n"
+            f"  Start Webbing: {lp_start_webbing:.2f}\n"
+            f"  Webbing:       {lp_webbing:.2f}\n"
+        f"Backup activated : {np.any(backup_activated)}"
     )
 
     return {
@@ -230,6 +252,7 @@ def post_process(result, skip = 1):
             "f_anchor1": f_anchor1,
             "f_anchor2": f_anchor2,
             "f_leash": f_leash,
+            "backup_activated": backup_activated,
             }
 
 def leash_event(t, Z):
@@ -241,7 +264,13 @@ def leash_event(t, Z):
     i = dofhandler.start_slackliner
     z_slack = Z[i:i+2]
 
-    dist = np.linalg.norm(z_slack - z_ring)
+    dist = np.linalg.norm(z_slack - z_ring) 
+
+    # v_ring = Z[2*i_leashring + dofhandler.offset:2*i_leashring + dofhandler.offset + 2]
+    # v_slack = Z[i + dofhandler.offset:i + dofhandler.offset + 2]
+    # velocity_innerprod = np.dot(v_ring, v_slack)
+    # if (velocity_innerprod > 0):
+    #     return 1.0
 
     return dist - l_leash
 
@@ -269,8 +298,12 @@ def apply_collision(Z):
         m_slackliner*v_slack
     )/(m + m_slackliner)
 
+    # Update velocities
     Z[i_ring:i_ring+2] = v
     Z[i_slack:i_slack+2] = v
+
+    # Slightly modify leash position to avoid retriggering event
+    Z[2*ring+1] = Z[2*ring + 1] + 1E-12
 
     return Z
 
@@ -307,11 +340,15 @@ def ODE_rhs_vectorized(t, Z):
     dist_prev = np.linalg.norm(d_prev, axis=1)
     dist_next = np.linalg.norm(d_next, axis=1)
 
-    beta_prev = np.maximum(dist_prev - l, 0.0) / l
-    beta_next = np.maximum(dist_next - l, 0.0) / l
+    if (break_mainline):
+        kl_beta_prev = kl_backup * np.maximum(dist_prev - l_backup, 0.0) / l_backup
+        kl_beta_next = kl_backup * np.maximum(dist_next - l_backup, 0.0) / l_backup
+    else:
+        kl_beta_prev = kl * np.maximum(dist_prev - l, 0.0) / l + kl_backup * np.maximum(dist_prev - l_backup, 0.0) / l_backup
+        kl_beta_next = kl * np.maximum(dist_next - l, 0.0) / l + kl_backup * np.maximum(dist_next - l_backup, 0.0) / l_backup
 
-    F_prev = kl * beta_prev[:, None] * d_prev / dist_prev[:, None]
-    F_next = kl * beta_next[:, None] * d_next / dist_next[:, None]
+    F_prev = kl_beta_prev[:, None] * d_prev / dist_prev[:, None]
+    F_next = kl_beta_next[:, None] * d_next / dist_next[:, None]
 
     F = m * g + F_prev + F_next
 
@@ -362,6 +399,8 @@ def ODE_rhs_vectorized(t, Z):
 
         z_slack = Z[i:i+2]
         z_ring = pos[i_leashring, :]
+        vel_slack = Z[i + dofhandler.offset: i +dofhandler.offset+2]
+        vel_norm = np.linalg.norm(vel_slack)
 
         d = z_ring - z_slack
         dist = np.linalg.norm(d)
@@ -373,163 +412,46 @@ def ODE_rhs_vectorized(t, Z):
             F_slack = m_slackliner*g
 
         out[i+dofhandler.offset:i+dofhandler.offset+2] = (
-            F_slack/m_slackliner
+            F_slack/m_slackliner - cslack*vel_slack*vel_norm
         )
 
     return out
-# def ODE_rhs_vectorized(t, Z):
-#     global last_t
-#     if t > last_t:
-#         last_t = t
-
-#     global last_update
-#     if last_t - last_update >= update_every:
-#         pbar.update(last_t - last_update)
-#         last_update = last_t
-
-#     out = np.zeros(2*dofhandler.offset)
-#     out[0:dofhandler.offset] = Z[dofhandler.offset:]
-
-#     size_D = 2*N-2
-#     D = Z[2:2*N] - Z[0:2*N-2]
-#     norms = np.hypot(D[0::2], D[1::2])
-#     lvec = np.full_like(norms,l)
-#     zers = np.zeros_like(lvec)
-
-#     factor_m1 = np.maximum(zers,kl/m*(1 - lvec[0:N-1]/norms[0:N-1]))
-#     tension_acc_im1_x = factor_m1 * D[0:2*N-4:2]
-#     tension_acc_im1_y = factor_m1 * D[1:2*N-4:2]
-
-#     factor_p1 = np.maximum(zers,kl/m*(1 - lvec[1:N]/norms[1:N]))
-#     tension_acc_ip1_x = factor_p1 * D[2:2*N-2:2]
-#     tension_acc_ip1_y = factor_p1 * D[3:2*N-2:2]
-
-#     vels = Z[2 + dofhandler.offset:2*N + dofhandler.offset] - Z[0 + dofhandler.offset:2*N-2 + dofhandler.offset]
-
-#     velnorms = np.hypot(Z[dofhandler.offset:dofhandler.offset + 2*N:2],
-#                         Z[dofhandler.offset+1:dofhandler.offset + 2*N:2])
-
-#     print(f"size out...: {out[dofhandler.offset:2:dofhandler.offset + 2*N].shape}")
-#     print(f"size tens...: {tension_acc_im1_x.shape}")
-#     out[dofhandler.offset:dofhandler.offset + 2*N:2] = g[0] + tension_acc_im1_x + tension_acc_ip1_x - c*vels[0:2:2*N]*velnorms
-#     out[dofhandler.offset+1:dofhandler.offset+1 + 2*N:2] = g[1] + tension_acc_im1_y + tension_acc_ip1_y - c*vels[1:2:2*N]*velnorms
-
-
-#     # Add leash and detect collision
-#     if (dofhandler.with_slackliner):
-#         i = 2*i_leashring
-#         zi = np.array([Z[i], Z[i+1]])
-#         zslackliner = Z[dofhandler.start_slackliner: dofhandler.start_slackliner+2]
-#         F = F + tension_force(zslackliner, zi, kl_leash, l_leash)
-
-#         # Non-elastic collision
-#         if (detect_collision and np.linalg.norm(zslackliner - zi) >= l_leash):
-#             vi = Z[i + dofhandler.offset: i + dofhandler.offset + 2]
-#             vs = Z[dofhandler.start_slackliner + dofhandler.offset: dofhandler.start_slackliner + dofhandler.offset + 2]
-#             v = (m_slackliner * vs + m * vi)/(m_slackliner + m)
-
-#             Z[i + dofhandler.offset: i + dofhandler.offset + 2] = v
-#             Z[dofhandler.start_slackliner + dofhandler.offset: dofhandler.start_slackliner + dofhandler.offset + 2] = v
-
-
-#     # Equation for slackliner
-#     if (dofhandler.with_slackliner):
-#         i = dofhandler.start_slackliner
-#         zslackliner = Z[i: i+2]
-#         zleashring = Z[2*i_leashring:2*i_leashring+2]
-
-#         F = m_slackliner*g + tension_force(zleashring, zslackliner, kl_leash, l_leash)
-
-#         out[i + dofhandler.offset] = F[0]/m_slackliner   #-c/m_slackliner*Z[i + dofhandler.offset]
-#         out[i+1 + dofhandler.offset] = F[1]/m_slackliner #-c/m_slackliner*Z[i+1 + dofhandler.offset]
-
-#     return out
 
 # Tension of section
 # @njit
-def tension(zi, zip1, kl, l):
-    dist = np.linalg.norm(zip1 - zi)
-    e = dist - l
+def tension(zi, zip1, kl, l, kl_backup = 0):
+    out = 0.0
 
+    dist = np.linalg.norm(zip1 - zi)
+
+    # main
+    e = dist - l
     if (e > 0):
         beta = e / l
-        return kl * beta
+        out += kl * beta
 
-    if (e <= 0):
-        return 0
+    # backup
+    e = dist - l_backup
+    if (e > 0):
+        beta = e/l_backup
+        out += kl_backup * beta
 
-    return 0
+    return out
 
 # @njit
-def tension_force(z1, z2, kl, l):
+def tension_force(z1, z2, kl, l, kl_backup = 0):
     v = (z1 - z2)/np.linalg.norm(z1 - z2)
-    return tension(z1, z2, kl, l)*v
+    return tension(z1, z2, kl, l, kl_backup)*v
 
 # @njit
 def net_force_mainline(zim1, zi, zip1, mm):
 
-    Fim1 = tension_force(zim1, zi, kl, l)
-    Fip1 = tension_force(zip1, zi, kl, l)
+    Fim1 = tension_force(zim1, zi, kl, l, kl_backup)
+    Fip1 = tension_force(zip1, zi, kl, l, kl_backup)
 
     F = mm*g + Fim1 + Fip1
     return F
 
-
-# @njit
-def ODE_rhs(t, Z):
-    global last_t
-    if t > last_t:
-        last_t = t
-
-    global last_update
-    if last_t - last_update >= update_every:
-        pbar.update(last_t - last_update)
-        last_update = last_t
-
-    out = np.zeros(2*dofhandler.offset)
-
-    out[0:dofhandler.offset] = Z[dofhandler.offset:]
-
-    # Main line equations
-    for i in range(0,2*N,2):
-        if (i < 2 or i >= 2*N-2): continue
-
-        zi = np.array([Z[i], Z[i+1]])
-        zim1 = np.array([Z[i-2], Z[i-1]])
-        zip1 = np.array([Z[i+2], Z[i+3]])
-
-        F = net_force_mainline(zim1, zi, zip1, m)
-
-        if (dofhandler.with_slackliner and i == 2*i_leashring):
-            zslackliner = Z[dofhandler.start_slackliner: dofhandler.start_slackliner+2]
-            F = F + tension_force(zslackliner, zi, kl_leash, l_leash)
-
-            # Non-elastic collision
-            if (detect_collision and np.linalg.norm(zslackliner - zi) >= l_leash):
-                vi = Z[i + dofhandler.offset: i + dofhandler.offset + 2]
-                vs = Z[dofhandler.start_slackliner + dofhandler.offset: dofhandler.start_slackliner + dofhandler.offset + 2]
-                v = (m_slackliner * vs + m * vi)/(m_slackliner + m)
-
-                Z[i + dofhandler.offset: i + dofhandler.offset + 2] = v
-                Z[dofhandler.start_slackliner + dofhandler.offset: dofhandler.start_slackliner + dofhandler.offset + 2] = v
-
-        vel_norm = np.linalg.norm(Z[i+dofhandler.offset:i+dofhandler.offset+2])
-        out[i + dofhandler.offset] = F[0]/m   -c*Z[i + dofhandler.offset]*vel_norm  # x
-        out[i+1 + dofhandler.offset] = F[1]/m -c*Z[i+1 + dofhandler.offset]*vel_norm  # y
-
-
-    # Equation for slackliner
-    if (dofhandler.with_slackliner):
-        i = dofhandler.start_slackliner
-        zslackliner = Z[i: i+2]
-        zleashring = Z[2*i_leashring:2*i_leashring+2]
-
-        F = m_slackliner*g + tension_force(zleashring, zslackliner, kl_leash, l_leash)
-
-        out[i + dofhandler.offset] = F[0]/m_slackliner   #-c/m_slackliner*Z[i + dofhandler.offset]
-        out[i+1 + dofhandler.offset] = F[1]/m_slackliner #-c/m_slackliner*Z[i+1 + dofhandler.offset]
-
-    return out
 
 # @njit
 def static_rhs(Z):
@@ -580,77 +502,78 @@ def get_static_position(pos):
     print("Message:", mesg)
     return sol
 
-def integrate_with_collision(y0, t0, tf, **solve_kwargs):
+def integrate_with_collisions(y0, t0, tf, **solve_kwargs):
     """
-    Integrate until tf, allowing one leash collision.
+    Integrate until tf, applying collisions whenever `leash_event` occurs.
     """
 
-    sol1 = solve_ivp(
-        ODE_rhs_vectorized,
-        (t0, tf),
-        y0,
-        events=leash_event,
-        **solve_kwargs
-    )
+    t_current = t0
+    y_current = y0
 
-    # No collision
-    if sol1.status != 1:
-        return sol1
+    t_all = []
+    y_all = []
+    collision_times = []
 
-    # Event time/state
-    t_hit = sol1.t_events[0][0]
-    y_hit = sol1.y_events[0][0]
+    while t_current < tf:
 
-    # Update velocities
-    y_after = apply_collision(y_hit)
+        sol = solve_ivp(
+            ODE_rhs_vectorized,
+            (t_current, tf),
+            y_current,
+            events=leash_event,
+            **solve_kwargs
+        )
 
-    # Continue integration
-    sol2 = solve_ivp(
-        ODE_rhs_vectorized,
-        (t_hit, tf),
-        y_after,
-        **solve_kwargs
-    )
+        # Append solution (avoid duplicating first point)
+        if len(t_all) == 0:
+            t_all.extend(sol.t)
+            y_all.append(sol.y)
+        else:
+            t_all.extend(sol.t[1:])
+            y_all.append(sol.y[:, 1:])
 
-    # Concatenate solutions
-    t = np.concatenate([sol1.t, sol2.t[1:]])
-    y = np.hstack([sol1.y, sol2.y[:, 1:]])
+        # Finished without another collision
+        if sol.status != 1:
+            break
 
-    # Optional: return both pieces as well
+        # Collision
+        t_current = sol.t_events[0][0]
+        y_current = apply_collision(sol.y_events[0][0])
+        collision_times.append(t_current)
+
+        print(f"detected collision at t = {t_current:.2f}")
+
     return {
-        "t": t,
-        "y": y,
-        "collision_time": t_hit,
+        "t": np.array(t_all),
+        "y": np.hstack(y_all),
+        "collision_times": collision_times,
     }
 
 def main():
 
-    add_tension(-1)
+    add_tension(-1.25)
     print(f"c: {c}")
     
-    pos = get_initial_pos_from_tension(T_kN = 3)
+    pos = get_initial_pos_from_tension(T_kN = 0.03)
     pos = get_static_position(pos)
 
     pos = dofhandler.get_position_line_and_slackliner(pos, walking = True)
     
     plot_rope(pos, label = 'static pos')
     plt.title(f"Tension = {compute_tension_mainline(pos)/1000} kN")
+    print(f"Tension = {compute_tension_mainline(pos)/1000} kN")
     print(f"weight of line: {m*(N-2)}")
 
     vel = np.zeros_like(pos)
     Z = np.concatenate((pos, vel))
 
-    # print("Z:")
-    # print(Z)
-
-    result = integrate_with_collision(
+    result = integrate_with_collisions(
         Z,
         t0,
         t1,
         rtol=1e-8,
         atol=1e-10,
     )
-    # result = solve_ivp(ODE_rhs, (t0,t1), Z, rtol = 1E-8, atol = 1E-10)
 
     pp = post_process(result, skip = 1)
 
