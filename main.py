@@ -15,7 +15,7 @@ detect_collision = True
 
 g = np.array([0, -9.82])
 m_slackliner = 89  # Mass if slackliner [kg]
-N = 101             # Discretization
+N = 21             # Discretization
 i_leashring = int(N/2)  # id of pt with slackliner hanging/standing
 L = 50             # Line length [m]
 l_leash = 1.3      # Length of leash [m]
@@ -29,7 +29,7 @@ kl_leash = 400*1E3 # Spring constant times length - Joker
 # kl = 500*1E3     # Spring constant times length - Y2K
 l = L/(N-1)        # length of discretized line segment
 m =  ( L*rho + (L+3)*rho_backup)/(N-2) # mass of point [kg]
-zeta = 0.005        # Dampening parameter for linear dampening
+zeta = 0.0005        # Dampening parameter for linear dampening
 c = zeta *2*math.sqrt(m*kl/l)
 
 # ODE setting
@@ -129,7 +129,7 @@ def plot_rope(Z, ax = None, label = None):
     return ax
 
 
-def animate_rope(result, skip=50):
+def animate_rope(result, pp, skip=10):
     fig, ax = plt.subplots(figsize=(16, 9))
 
     ax.set_xlim(-0.05 * L, 1.05 * L)
@@ -144,6 +144,11 @@ def animate_rope(result, skip=50):
 
     start_wall = time.perf_counter()
     start_sim = result["t"][0]
+
+    f_w = pp["f_webbing"]
+    f_a1 = pp["f_anchor1"]
+    f_a2 = pp["f_anchor2"]
+    f_leash = pp["f_leash"]
 
     for i in range(0, len(result["t"]), skip):
         t = result["t"][i]
@@ -162,19 +167,20 @@ def animate_rope(result, skip=50):
         xs = [Z[2*i_leashring], Z[dofhandler.start_slackliner]]
         ys = [Z[2*i_leashring+1], Z[dofhandler.start_slackliner+1]]
         line_slackliner.set_data(xs, ys)
-        ax.set_title(f"t = {t:.3f} s")
+
+        ax.set_title(f"t = {t:.1f}s, F_w = {f_w[i]/1000:.1f}kN, F_l = {f_leash[i]/1000:.1f}kN")
         fig.canvas.draw_idle()
         plt.pause(0.00001)
 
     plt.show()
 
-def print_stats(result, skip = 1):
+def post_process(result, skip = 1):
 
     #max force in
-    mf_webbing = 0
-    mf_anchor1 = 0
-    mf_anchor2 = 0
-    mf_leash = 0
+    f_webbing = np.empty_like(result["t"])
+    f_anchor1 = np.empty_like(result["t"])
+    f_anchor2 = np.empty_like(result["t"])
+    f_leash = np.empty_like(result["t"])
 
     # lowest point
     lp_start_webbing = np.min(result["y"][0:2*N,0])
@@ -194,28 +200,37 @@ def print_stats(result, skip = 1):
         d_prev = pos[:-2,:] - pos[1:-1,:]
         dist_prev = np.linalg.norm(d_prev, axis=1)
         beta_prev = np.maximum(dist_prev - l, 0.0) / l
-        F_mag_prev = kl * beta_prev[:, None] 
+        F_mag_prev = kl * beta_prev[:] 
 
-        mf_webbing = max(mf_webbing, np.max(F_mag_prev))
+        f_webbing[i] = np.max(F_mag_prev)
+        f_anchor1[i] = F_mag_prev[0]
+        f_anchor2[i] = F_mag_prev[-1]
 
         if (dofhandler.with_slackliner):
             jj = dofhandler.start_slackliner
             zslackliner = Z[jj: jj+2]
             zleashring = Z[2*i_leashring:2*i_leashring+2]
 
-            mf_leash = max(mf_leash, tension(zleashring, zslackliner, kl_leash, l_leash))
+            f_leash[i] = tension(zleashring, zslackliner, kl_leash, l_leash)
 
 
     print(
         f"Max Forces:\n"
-        f"  Webbing:  {mf_webbing:.2f}\n"
-        f"  Anchor 1: {mf_anchor1:.2f}\n"
-        f"  Anchor 2: {mf_anchor2:.2f}\n"
-        f"  Leash:    {mf_leash:.2f}\n\n"
+        f"  Webbing:  {np.max(f_webbing):.2f}\n"
+        f"  Anchor 1: {np.max(f_anchor1):.2f}\n"
+        f"  Anchor 2: {np.max(f_anchor2):.2f}\n"
+        f"  Leash:    {np.max(f_leash):.2f}\n\n"
         f"Lowest Points:\n"
         f"  Start Webbing: {lp_start_webbing:.2f}\n"
         f"  Webbing:       {lp_webbing:.2f}"
     )
+
+    return {
+            "f_webbing": f_webbing,
+            "f_anchor1": f_anchor1,
+            "f_anchor2": f_anchor2,
+            "f_leash": f_leash,
+            }
 
 def leash_event(t, Z):
     if not dofhandler.with_slackliner:
@@ -637,9 +652,9 @@ def main():
     )
     # result = solve_ivp(ODE_rhs, (t0,t1), Z, rtol = 1E-8, atol = 1E-10)
 
-    print_stats(result, skip = 1)
+    pp = post_process(result, skip = 1)
 
-    # animate_rope(result)
+    animate_rope(result, pp)
 
 if __name__ == "__main__":
     main()
