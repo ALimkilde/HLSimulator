@@ -10,6 +10,14 @@ import sys
 
 from config import * # Change when we switch to segmented setups
 
+# weight
+rho = segs[0].rho_main        # Density [kg/m] (main) - Joker 
+rho_backup = segs[0].rho_backup # Density [kg/m] (main) - Mamba
+
+# elasticity
+kl = segs[0].kl_main            
+kl_backup = segs[0].kl_backup
+
 g = np.array([0, -9.82])
 l = L/(N-1)                               # length of discretized line segment
 l_backup = L_backup/(N-1)                 # length of discretized line segment
