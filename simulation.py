@@ -10,26 +10,85 @@ import sys
 
 from config import * # Change when we switch to segmented setups
 
+from itertools import accumulate
+
+def discretize_segments(segments, x):
+    """
+    Parameters
+    ----------
+    segments : list[segment]
+        Consecutive line segments.
+    x : array_like
+        Node positions (length N).
+
+    Returns
+    -------
+    kl : (N-1,) ndarray
+        Main spring constant × length for each interval.
+    kl_backup : (N-1,) ndarray
+        Backup spring constant × length for each interval.
+    l : (N-1,) ndarray
+        Interval lengths.
+    l_backup : (N-1,) ndarray
+        Backup interval lengths (same as l).
+    m : (N-2,) ndarray
+        Mass associated with interior nodes.
+    """
+    x = np.asarray(x)
+
+    l = np.diff(x)
+    mid = x[:-1] + 0.5 * l
+
+    # Segment boundaries
+    bounds = np.array([0.0, *accumulate(s.L_main for s in segments)])
+
+    # Segment index for each interval
+    idx = np.searchsorted(bounds, mid, side="right") - 1
+    idx = np.clip(idx, 0, len(segments) - 1)
+
+    kl = np.array([segments[i].kl_main for i in idx])
+    kl_backup = np.array([segments[i].kl_backup for i in idx])
+
+    rho = np.array([segments[i].rho_main for i in idx])
+    rho_backup = np.array([segments[i].rho_backup for i in idx])
+
+    l_backup = l.copy()*(L_backup/L)
+
+    # Mass of each interval
+    interval_mass = rho * l + rho_backup * l_backup
+
+    # Interior node masses (half from each neighbouring interval)
+    m = 0.5 * (interval_mass[:-1] + interval_mass[1:])
+
+    break_mainline = np.array([segments[i].break_mainline for i in idx], dtype=bool)
+
+    return kl, m, l, kl_backup, l_backup, break_mainline
+
 # weight
 rho = segs[0].rho_main        # Density [kg/m] (main) - Joker 
 rho_backup = segs[0].rho_backup # Density [kg/m] (main) - Mamba
 
 # elasticity
-kl = np.full(N-1, segs[0].kl_main)
-kl_backup = np.full(N-1, segs[0].kl_backup)
+# kl = np.full(N-1, segs[0].kl_main)
+# kl_backup = np.full(N-1, segs[0].kl_backup)
 
 g = np.array([0, -9.82])
-l = np.full(N-1, L/(N-1))                 # length of discretized line segment
-l_backup = np.full(N-1,L_backup/(N-1))    # length of discretized line segment
-m = np.full(N-2, (L*rho + L_backup*rho_backup)/(N-2)) # mass of point [kg] TODO
+# l = np.full(N-1, L/(N-1))                 # length of discretized line segment
+# l_backup = np.full(N-1,L_backup/(N-1))    # length of discretized line segment
+# m = np.full(N-2, (L*rho + L_backup*rho_backup)/(N-2)) # mass of point [kg] TODO
+
+kl, m, l, kl_backup, l_backup, break_mainline = discretize_segments(segs, np.linspace(0,L,N))
+
 c = zeta *2*np.sqrt(m[0]*kl[0]/l[0])             # dampening TODO
 cslack = 0.0 #zeta *2*math.sqrt(m*kl/(l*m_slackliner))
+
 
 # progress bar
 pbar = tqdm(total=t1 - t0, unit = "sim s", unit_scale=False)
 last_t = t0
 last_update = t0
 update_every = 0.01  # simulated seconds
+
 
 # Degrees of Freedom handler for ODE
 @dataclass
@@ -119,10 +178,15 @@ def post_process(result, skip = 1):
         # vectors to previous and next nodes
         d_prev = pos[:-1,:] - pos[1:,:] 
         dist_prev = np.linalg.norm(d_prev, axis=1)
-        if (break_mainline):
-            kl_beta_prev = kl_backup * np.maximum(dist_prev - l_backup, 0.0) / l_backup
-        else:
-            kl_beta_prev = kl * np.maximum(dist_prev - l, 0.0) / l + kl_backup * np.maximum(dist_prev - l_backup, 0.0) / l_backup
+
+        main = kl * np.maximum(dist_prev - l, 0.0) / l
+        backup = kl_backup * np.maximum(dist_prev - l_backup, 0.0) / l_backup
+        
+        kl_beta_prev = np.where(
+            break_mainline,
+            backup,
+            main + backup,
+        )
 
         F_mag_prev = kl_beta_prev[:] 
 
@@ -267,12 +331,23 @@ def ODE_rhs_vectorized(t, Z):
     dist_prev = np.linalg.norm(d_prev, axis=1)
     dist_next = np.linalg.norm(d_next, axis=1)
 
-    if (break_mainline):
-        kl_beta_prev = kl_backup[:-1] * np.maximum(dist_prev - l_backup[:-1], 0.0) / l_backup[:-1]
-        kl_beta_next = kl_backup[1:] * np.maximum(dist_next - l_backup[1:], 0.0) / l_backup[1:]
-    else:
-        kl_beta_prev = kl[:-1] * np.maximum(dist_prev - l[:-1], 0.0) / l[:-1] + kl_backup[:-1] * np.maximum(dist_prev - l_backup[:-1], 0.0) / l_backup[:-1]
-        kl_beta_next = kl[1:] * np.maximum(dist_next - l[1:], 0.0) / l[1:] + kl_backup[1:] * np.maximum(dist_next - l_backup[1:], 0.0) / l_backup[1:]
+    main_prev = kl[:-1] * np.maximum(dist_prev - l[:-1], 0.0) / l[:-1]
+    main_next = kl[1:]  * np.maximum(dist_next - l[1:], 0.0) / l[1:]
+    
+    backup_prev = kl_backup[:-1] * np.maximum(dist_prev - l_backup[:-1], 0.0) / l_backup[:-1]
+    backup_next = kl_backup[1:]  * np.maximum(dist_next - l_backup[1:], 0.0) / l_backup[1:]
+    
+    kl_beta_prev = np.where(
+        break_mainline[:-1],
+        backup_prev,
+        main_prev + backup_prev,
+    )
+    
+    kl_beta_next = np.where(
+        break_mainline[1:],
+        backup_next,
+        main_next + backup_next,
+    )
 
     F_prev = kl_beta_prev[:, None] * d_prev / dist_prev[:, None]
     F_next = kl_beta_next[:, None] * d_next / dist_next[:, None]

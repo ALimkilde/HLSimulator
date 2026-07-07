@@ -24,6 +24,7 @@ class segment:
     rho_backup : float # Density of backup
     L_main     : float # Length of main piece
     L_backup   : float # Length of backup piece
+    break_mainline : bool
 
     def __init__(
         self,
@@ -31,6 +32,7 @@ class segment:
         webbing_backup: webbing,
         L_main: float,
         L_backup: float,
+        break_mainline: bool,
     ):
         self.kl_main = webbing_main.kl
         self.kl_backup = webbing_backup.kl
@@ -38,6 +40,7 @@ class segment:
         self.rho_backup = webbing_backup.rho
         self.L_main = L_main
         self.L_backup = L_backup
+        self.break_mainline = break_mainline
 
 # Webbings
 joker = webbing(stretch_pct = 3.6,  tension_kN = 5, weight_g_m = 54) 
@@ -45,15 +48,17 @@ solid = webbing(stretch_pct = 2.5,  tension_kN = 5, weight_g_m = 50)
 y2k   = webbing(stretch_pct = 1.0,  tension_kN = 5, weight_g_m = 33) 
 
 # Webbings and line
-L = 150             # Line length [m]
-L_backup = L + 20
+L = 100             # Line length [m]
+L_backup = L + 3
 pull_webbing = -2.0
 
 # Segmented setup
-segs = [ segment(joker, solid, L, L_backup) ]
+# segs = [ segment(joker, solid, L, L_backup, True) ]
+segs = [ segment(joker, solid, L/2, L_backup/2, True),
+         segment(joker, solid, L/2, L_backup/2, False),  ]
 
 # Experiment
-break_mainline = True
+break_mainline = False
 
 # Slackliner
 m_slackliner = 89  # Mass if slackliner [kg]
@@ -71,4 +76,4 @@ detect_collision = True
 
 # ODE setting
 t0 = 0
-t1 = 5
+t1 = 0.08

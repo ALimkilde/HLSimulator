@@ -58,6 +58,7 @@ class RopePlayer:
 
         self.line.set_data(x, y)
 
+        # TODO color only parts of line red
         self.line.set_color(
             "red" if self.result["backup_activated"][i] else "blue"
         )
