@@ -15,14 +15,14 @@ rho = segs[0].rho_main        # Density [kg/m] (main) - Joker
 rho_backup = segs[0].rho_backup # Density [kg/m] (main) - Mamba
 
 # elasticity
-kl = segs[0].kl_main            
-kl_backup = segs[0].kl_backup
+kl = np.full(N-1, segs[0].kl_main)
+kl_backup = np.full(N-1, segs[0].kl_backup)
 
 g = np.array([0, -9.82])
-l = L/(N-1)                               # length of discretized line segment
-l_backup = L_backup/(N-1)                 # length of discretized line segment
-m =  ( L*rho + L_backup*rho_backup)/(N-2) # mass of point [kg]
-c = zeta *2*math.sqrt(m*kl/l)             # dampening
+l = np.full(N-1, L/(N-1))                 # length of discretized line segment
+l_backup = np.full(N-1,L_backup/(N-1))    # length of discretized line segment
+m = np.full(N-2, (L*rho + L_backup*rho_backup)/(N-2)) # mass of point [kg] TODO
+c = zeta *2*np.sqrt(m[0]*kl[0]/l[0])             # dampening TODO
 cslack = 0.0 #zeta *2*math.sqrt(m*kl/(l*m_slackliner))
 
 # progress bar
@@ -84,7 +84,7 @@ def compute_tension_mainline(pos):
     for i in range(0,2*N-2,2):
         zi = np.array([pos[i], pos[i+1]])
         zip1 = np.array([pos[i+2], pos[i+3]])
-        t[i] = tension(zi, zip1, kl, l)
+        t[i] = tension(zi, zip1, kl[i], l[i])
 
     return np.max(t)
 
@@ -117,7 +117,7 @@ def post_process(result, skip = 1):
         vel = Z[dofhandler.offset:dofhandler.offset+2*N].reshape(N, 2)
 
         # vectors to previous and next nodes
-        d_prev = pos[:-2,:] - pos[1:-1,:]
+        d_prev = pos[:-1,:] - pos[1:,:] 
         dist_prev = np.linalg.norm(d_prev, axis=1)
         if (break_mainline):
             kl_beta_prev = kl_backup * np.maximum(dist_prev - l_backup, 0.0) / l_backup
@@ -221,9 +221,9 @@ def apply_collision(Z):
 
     # momentum-conserving velocity
     v = (
-        m*v_ring +
+        m[i_leashring]*v_ring +
         m_slackliner*v_slack
-    )/(m + m_slackliner)
+    )/(m[i_leashring] + m_slackliner)
 
     # Update velocities
     Z[i_ring:i_ring+2] = v
@@ -268,16 +268,16 @@ def ODE_rhs_vectorized(t, Z):
     dist_next = np.linalg.norm(d_next, axis=1)
 
     if (break_mainline):
-        kl_beta_prev = kl_backup * np.maximum(dist_prev - l_backup, 0.0) / l_backup
-        kl_beta_next = kl_backup * np.maximum(dist_next - l_backup, 0.0) / l_backup
+        kl_beta_prev = kl_backup[:-1] * np.maximum(dist_prev - l_backup[:-1], 0.0) / l_backup[:-1]
+        kl_beta_next = kl_backup[1:] * np.maximum(dist_next - l_backup[1:], 0.0) / l_backup[1:]
     else:
-        kl_beta_prev = kl * np.maximum(dist_prev - l, 0.0) / l + kl_backup * np.maximum(dist_prev - l_backup, 0.0) / l_backup
-        kl_beta_next = kl * np.maximum(dist_next - l, 0.0) / l + kl_backup * np.maximum(dist_next - l_backup, 0.0) / l_backup
+        kl_beta_prev = kl[:-1] * np.maximum(dist_prev - l[:-1], 0.0) / l[:-1] + kl_backup[:-1] * np.maximum(dist_prev - l_backup[:-1], 0.0) / l_backup[:-1]
+        kl_beta_next = kl[1:] * np.maximum(dist_next - l[1:], 0.0) / l[1:] + kl_backup[1:] * np.maximum(dist_next - l_backup[1:], 0.0) / l_backup[1:]
 
     F_prev = kl_beta_prev[:, None] * d_prev / dist_prev[:, None]
     F_next = kl_beta_next[:, None] * d_next / dist_next[:, None]
 
-    F = m * g + F_prev + F_next
+    F = m[:, None] * g + F_prev + F_next
 
     ############################################################
     # Slackliner
@@ -309,7 +309,7 @@ def ODE_rhs_vectorized(t, Z):
     vel_norm = np.linalg.norm(vel[1:-1], axis=1)
 
     acc = (
-        F/m
+        F/m[:, None]
         - c*vel[1:-1]*vel_norm[:, None]
     )
 
@@ -346,7 +346,7 @@ def ODE_rhs_vectorized(t, Z):
 
 # Tension of section
 # @njit
-def tension(zi, zip1, kl, l, kl_backup = 0):
+def tension(zi, zip1, kl, l, kl_backup = None, l_backup = None):
     out = 0.0
 
     dist = np.linalg.norm(zip1 - zi)
@@ -358,52 +358,69 @@ def tension(zi, zip1, kl, l, kl_backup = 0):
         out += kl * beta
 
     # backup
-    e = dist - l_backup
-    if (e > 0):
-        beta = e/l_backup
-        out += kl_backup * beta
+    if (kl_backup is not None and l_backup is not None):
+        e = dist - l_backup
+        if (e > 0):
+            beta = e/l_backup
+            out += kl_backup * beta
 
     return out
 
 # @njit
-def tension_force(z1, z2, kl, l, kl_backup = 0):
+def tension_force(z1, z2, kl, l, kl_backup = None, l_backup = None):
     v = (z1 - z2)/np.linalg.norm(z1 - z2)
-    return tension(z1, z2, kl, l, kl_backup)*v
+    return tension(z1, z2, kl, l, kl_backup, l_backup)*v
 
 # @njit
-def net_force_mainline(zim1, zi, zip1, mm):
+def net_force_mainline(zim1, zi, zip1, kl, l, mm, kl_backup = None, l_backup = None):
 
-    Fim1 = tension_force(zim1, zi, kl, l, kl_backup)
-    Fip1 = tension_force(zip1, zi, kl, l, kl_backup)
+    Fim1 = tension_force(zim1, zi, kl, l, kl_backup, l_backup)
+    Fip1 = tension_force(zip1, zi, kl, l, kl_backup, l_backup)
 
     F = mm*g + Fim1 + Fip1
     return F
 
 
-# @njit
 def static_rhs(Z):
-    out = np.zeros(2*N)
 
-    out[0] = Z[0]             # x0 = 0
-    out[1] = Z[1]             # y0 = 0
-    out[2*N-2] = Z[2*N-2] - L # x1 = L
-    out[2*N-1] = Z[2*N-1]     # y1 = 0
+    out = np.zeros_like(Z)
 
-    for i in range(0,2*N,2):
-        if (i < 2 or i >= 2*N-2): continue
+    pos = Z.reshape(N,2)
 
-        if (i == 2*i_leashring): # Add slackliner where he is hanging from leashring
-            mm = m + m_slackliner
-        else:
-            mm = m
-        
-        zi = np.array([Z[i], Z[i+1]])
-        zim1 = np.array([Z[i-2], Z[i-1]])
-        zip1 = np.array([Z[i+2], Z[i+3]])
+    # boundary conditions
+    out[0] = pos[0,0]
+    out[1] = pos[0,1]
 
-        F = net_force_mainline(zim1, zi, zip1, mm)
-        out[i] = F[0]
-        out[i+1] = F[1]
+    out[-2] = pos[-1,0] - L
+    out[-1] = pos[-1,1]
+
+    d_prev = pos[:-2] - pos[1:-1]
+    d_next = pos[2:]  - pos[1:-1]
+
+    dist_prev = np.linalg.norm(d_prev, axis=1)
+    dist_next = np.linalg.norm(d_next, axis=1)
+
+    beta_prev = (
+        kl[:-1]*np.maximum(dist_prev-l[:-1],0)/l[:-1]
+        + kl_backup[:-1]*np.maximum(dist_prev-l_backup[:-1],0)/l_backup[:-1]
+    )
+
+    beta_next = (
+        kl[1:]*np.maximum(dist_next-l[1:],0)/l[1:]
+        + kl_backup[1:]*np.maximum(dist_next-l_backup[1:],0)/l_backup[1:]
+    )
+
+    F_prev = beta_prev[:,None]*d_prev/dist_prev[:,None]
+    F_next = beta_next[:,None]*d_next/dist_next[:,None]
+
+    masses = m.copy()
+
+    if dofhandler.with_slackliner:
+        masses[i_leashring-1] += m_slackliner
+
+    F = masses[:,None]*g + F_prev + F_next
+
+    out[2:-2] = F.reshape(-1)
 
     return out
 
@@ -424,9 +441,9 @@ def get_initial_pos_from_tension(T_kN = 2):
 
 def get_static_position(pos = None):
     if (pos is None):
-        w_line = m*(N-2)
-        # pos = get_initial_pos_from_tension(T_kN = 9.82*w_line*2)
-        pos = get_initial_pos_from_tension(T_kN = 0.5)
+        w_line = np.sum(m)
+        pos = get_initial_pos_from_tension(T_kN = 9.82*w_line*2)
+        # pos = get_initial_pos_from_tension(T_kN = 0.5)
 
     sol, info, ier, mesg = fsolve(static_rhs, pos, full_output=True)
 

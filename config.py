@@ -53,20 +53,13 @@ pull_webbing = -2.0
 segs = [ segment(joker, solid, L, L_backup) ]
 
 # Experiment
-break_mainline = False
+break_mainline = True
 
 # Slackliner
 m_slackliner = 89  # Mass if slackliner [kg]
 l_leash = 1.3      # Length of leash [m]
 l_leg = 1.1        # Length of legs [m] (until harness connection point)
 
-# weight
-rho = segs[0].rho_main        # Density [kg/m] (main) - Joker 
-rho_backup = segs[0].rho_backup # Density [kg/m] (main) - Mamba
-
-# elasticity
-kl = segs[0].kl_main            
-kl_backup = segs[0].kl_backup
 kl_leash = 200*1E3 # Spring constant times length - Leash
 
 # Discretization
@@ -78,4 +71,4 @@ detect_collision = True
 
 # ODE setting
 t0 = 0
-t1 = 4.5
+t1 = 5
