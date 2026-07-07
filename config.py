@@ -1,5 +1,5 @@
 # Experiment
-break_mainline = True
+break_mainline = False
 
 # Slackliner
 m_slackliner = 89  # Mass if slackliner [kg]
@@ -8,8 +8,9 @@ l_leg = 1.1        # Length of legs [m] (until harness connection point)
 
 # Webbings and line
 # length
-L = 60             # Line length [m]
-L_backup = L + 2.5 - 1.25
+L = 150             # Line length [m]
+L_backup = L + 20
+pull_webbing = -2.0
 
 # weight
 rho = 0.055        # Density [kg/m] (main) - Joker 
@@ -19,14 +20,14 @@ rho_backup = 0.050 # Density [kg/m] (main) - Mamba
 
 # elasticity
 kl = 139*1E3       # Spring constant times length - Joker
-kl_backup = 139*1E3       # Spring constant times length - Solid
+kl_backup = 200*1E3       # Spring constant times length - Solid
 # kl = 500*1E3     # Spring constant times length - Y2K
-kl_leash = 400*1E3 # Spring constant times length - Leash
+kl_leash = 200*1E3 # Spring constant times length - Leash
 
 # Discretization
-N = 101             # Discretization
+N = 31             # Discretization
 i_leashring = int(N/2)  # id of pt with slackliner hanging/standing
-zeta = 0.0055        # Dampening parameter for linear dampening
+zeta = 0.005        # Dampening parameter for linear dampening
 detect_collision = True
 
 

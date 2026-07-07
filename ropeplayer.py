@@ -28,7 +28,7 @@ class RopePlayer:
         self.fig, self.ax = plt.subplots(figsize=(16, 9))
 
         self.ax.set_xlim(-0.05 * L, 1.05 * L)
-        self.ax.set_ylim(np.min(result["y"]), 0.01 * L)
+        self.ax.set_ylim(np.min(result["y"][1:2*N+2:2]), np.max(result["y"][1:2*N+2:2]))
         self.ax.set_aspect("equal")
         self.ax.grid(True)
 
@@ -72,7 +72,8 @@ class RopePlayer:
         f_a1 = self.result["f_anchor1"][i]
         f_a2 = self.result["f_anchor2"][i]
         f_leash = self.result["f_leash"][i]
-        self.ax.set_title(f"t = {t:.1f}s, F_w = {f_w/1000:.1f}kN, F_l = {f_leash/1000:.1f}kN")
+        G_l = self.result["G_leash"][i]
+        self.ax.set_title(f"t = {t:.1f}s, F_w = {f_w/1000:.1f}kN, F_l = {f_leash/1000:.1f}kN, G = {G_l:.1f}")
 
         self.fig.canvas.draw_idle()
 

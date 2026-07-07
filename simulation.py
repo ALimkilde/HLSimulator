@@ -6,6 +6,7 @@ from numba import njit
 from dataclasses import dataclass
 from functools import cached_property
 from tqdm import tqdm
+import sys
 
 from config import * # Change when we switch to segmented setups
 
@@ -87,15 +88,20 @@ def post_process(result, skip = 1):
     f_anchor2 = np.empty_like(result["t"])
     f_leash = np.empty_like(result["t"])
     backup_activated = np.empty_like(result["t"], dtype = bool)
+    
+    # Gforces in leash
+    G_leash = np.zeros_like(result["t"])
 
     # lowest point
     lp_start_webbing = np.min(result["y"][0:2*N,0])
     lp_webbing = 0
+    lp_slackliner = 0
 
 
     for i in tqdm(range(0, len(result["t"]), skip), desc = "Post processing:"):
 
-        lp_webbing = min(np.min(result["y"][0:2*N,i]), lp_webbing)
+        lp_webbing = min(np.min(result["y"][1:2*N:2,i]), lp_webbing)
+        lp_slackliner = min(result["y"][dofhandler.start_slackliner + 1,i], lp_slackliner)
 
         Z = result["y"][:,i]
 
@@ -123,18 +129,35 @@ def post_process(result, skip = 1):
             zleashring = Z[2*i_leashring:2*i_leashring+2]
 
             f_leash[i] = tension(zleashring, zslackliner, kl_leash, l_leash)
+            if (i > 0):
+                i_prev = i - 20
+                dt = result["t"][i] - result["t"][i_prev]
+                vel_slack = Z[dofhandler.offset + dofhandler.start_slackliner:dofhandler.offset + dofhandler.start_slackliner + 2]
+                vel_slack_prev = result["y"][dofhandler.offset + dofhandler.start_slackliner:dofhandler.offset + dofhandler.start_slackliner + 2, i_prev]
+                acc = np.linalg.norm(vel_slack - vel_slack_prev) / dt          # m/s²
+                G_leash[i] = np.linalg.norm(acc) / 9.82
+                # if (G_leash[i] > 10):
+                    # print("High G forces")
 
 
     print(
+            f"\n\nWalking Forces:\n"
+            f"  Webbing:  {f_webbing[0]:.2f}\n"
+            f"  Anchor 1: {f_anchor1[0]:.2f}\n"
+            f"  Anchor 2: {f_anchor2[0]:.2f}\n"
+            f"  Leash:    {f_leash[0]:.2f}\n\n"
             f"Max Forces:\n"
             f"  Webbing:  {np.max(f_webbing):.2f}\n"
             f"  Anchor 1: {np.max(f_anchor1):.2f}\n"
             f"  Anchor 2: {np.max(f_anchor2):.2f}\n"
             f"  Leash:    {np.max(f_leash):.2f}\n\n"
+            f"Gforce:    {np.max(G_leash):.2f}\n\n"
             f"Lowest Points:\n"
             f"  Start Webbing: {lp_start_webbing:.2f}\n"
             f"  Webbing:       {lp_webbing:.2f}\n"
+            f"  Slackliner:    {lp_slackliner:.2f}\n\n"
         f"Backup activated : {np.any(backup_activated)}"
+        f"\n\n"
     )
 
     result.update({
@@ -142,7 +165,11 @@ def post_process(result, skip = 1):
         "f_anchor1": f_anchor1,
         "f_anchor2": f_anchor2,
         "f_leash": f_leash,
+        "G_leash": G_leash,
         "backup_activated": backup_activated,
+        "lp_start_webbing": lp_start_webbing,
+        "lp_webbing": lp_webbing,
+        "lp_slackliner": lp_slackliner,
     })
     
     return result
@@ -390,12 +417,16 @@ def get_initial_pos_from_tension(T_kN = 2):
 def get_static_position(pos = None):
     if (pos is None):
         w_line = m*(N-2)
-        pos = get_initial_pos_from_tension(T_kN = 9.82*w_line*2)
+        # pos = get_initial_pos_from_tension(T_kN = 9.82*w_line*2)
+        pos = get_initial_pos_from_tension(T_kN = 0.5)
 
     sol, info, ier, mesg = fsolve(static_rhs, pos, full_output=True)
-    # print("Solution:", sol)
-    print("ier:", ier)
-    print("Message:", mesg)
+
+    if (ier != 1):
+        print("Static solver could not converge!")
+        print("ier:", ier)
+        print("Message:", mesg)
+        sys.exit()
     return sol
 
 def integrate_with_collisions(y0, t0, tf, **solve_kwargs):
@@ -437,7 +468,7 @@ def integrate_with_collisions(y0, t0, tf, **solve_kwargs):
         y_current = apply_collision(sol.y_events[0][0])
         collision_times.append(t_current)
 
-        print(f"detected collision at t = {t_current:.2f}")
+        pbar.write(f"Leash started to see tension at t = {t_current:.2f}")
 
     return {
         "t": np.array(t_all),
@@ -446,6 +477,8 @@ def integrate_with_collisions(y0, t0, tf, **solve_kwargs):
     }
 
 def simulate(pos = None):
+    add_tension(pull_webbing)
+
     if (pos is None):
         pos = get_static_position()
 

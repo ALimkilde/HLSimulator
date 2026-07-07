@@ -7,6 +7,7 @@ import sys
 from tqdm import tqdm
 
 from simulation import simulate, add_tension, get_static_position, dofhandler, compute_tension_mainline
+from ropeplayer import RopePlayer
  
 from config import * # Change when we switch to segmented setups
 
@@ -94,23 +95,18 @@ def animate_rope(result, skip=500, keep_initial_in_background = True):
     plt.show()
 
 def plot_static_position(pos):
-    pos = dofhandler.get_position_line_and_slackliner(pos, walking = True)
-    
     plot_rope(pos, label = 'static pos')
     plt.title(f"Tension = {compute_tension_mainline(pos)/1000} kN")
     print(f"Tension = {compute_tension_mainline(pos)/1000} kN")
 
 def main():
 
-    add_tension(-1.25)
     
-    pos = get_static_position()
+    result = simulate()
 
-    plot_static_position(pos)
-
-    result = simulate(pos)
-
-    animate_rope(result)
+    # animate_rope(result)
+    player = RopePlayer(result)
+    plt.show()
 
 if __name__ == "__main__":
     main()
