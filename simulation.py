@@ -63,7 +63,7 @@ def discretize_segments(segments, x):
 
     break_mainline = np.array([segments[i].break_mainline for i in idx], dtype=bool)
 
-    return kl, m, l, kl_backup, l_backup, break_mainline
+    return kl, m, l, kl_backup, l_backup, break_mainline, idx
 
 # weight
 rho = segs[0].rho_main        # Density [kg/m] (main) - Joker 
@@ -78,7 +78,7 @@ g = np.array([0, -9.82])
 # l_backup = np.full(N-1,L_backup/(N-1))    # length of discretized line segment
 # m = np.full(N-2, (L*rho + L_backup*rho_backup)/(N-2)) # mass of point [kg] TODO
 
-kl, m, l, kl_backup, l_backup, break_mainline = discretize_segments(segs, np.linspace(0,L,N))
+kl, m, l, kl_backup, l_backup, break_mainline, seg_ids = discretize_segments(segs, np.linspace(0,L,N))
 
 c = zeta *2*np.sqrt(m[0]*kl[0]/l[0])             # dampening TODO
 cslack = 0.0 #zeta *2*math.sqrt(m*kl/(l*m_slackliner))
@@ -134,10 +134,23 @@ dofhandler = DoFHandler()
 # Adjust tension by adding/decreasing webbing
 # Add by 2m      : w = 2
 # Decrease by 2m : w = -2
-def add_tension(w):
+def add_tension(w, seg_id):
+    if (seg_id >= len(segs)):
+        print("wrong section for tensioning")
+        sys.exit()
     global l
-    alpha = w/L
-    l = l*(1+alpha)
+    L_main = np.sum(l[seg_ids == seg_id])
+    alpha = w/L_main
+    l[seg_ids == seg_id] = l[seg_ids == seg_id]*(1+alpha)
+
+    interval_mass = rho * l + rho_backup * l_backup
+
+    sum_main = np.sum(interval_mass[seg_ids == seg_id])
+    mass_removed = w*(segs[seg_id].rho_main + segs[seg_id].rho_backup)
+    alpha = mass_removed/sum_main
+    interval_mass[seg_ids == seg_id] = interval_mass[seg_ids == seg_id]*(1+alpha)
+
+    m = 0.5 * (interval_mass[:-1] + interval_mass[1:])
 
 def compute_tension_mainline(pos):
     t = np.zeros(2*N-2)
@@ -521,7 +534,8 @@ def get_initial_pos_from_tension(T_kN = 2):
 def get_static_position(pos = None):
     if (pos is None):
         w_line = np.sum(m)
-        pos = get_initial_pos_from_tension(T_kN = 9.82*w_line*2)
+        print(f"wline: {w_line}")
+        pos = get_initial_pos_from_tension(T_kN = w_line*9.82/1000)
         # pos = get_initial_pos_from_tension(T_kN = 0.5)
 
     sol, info, ier, mesg = fsolve(static_rhs, pos, full_output=True)
@@ -581,7 +595,7 @@ def integrate_with_collisions(y0, t0, tf, **solve_kwargs):
     }
 
 def simulate(pos = None):
-    add_tension(pull_webbing)
+    add_tension(pull_webbing, len(segs)-1)
 
     if (pos is None):
         pos = get_static_position()

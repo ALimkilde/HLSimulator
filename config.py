@@ -55,8 +55,8 @@ pull_webbing = -2.0
 # segs = [ segment(joker, solid, L, L_backup, False) ]
 print(f"Defacto backup length: {1.5 + pull_webbing/4}")
 segs = [ 
-        segment(joker, joker, L/4, L/4 + 1.5 + pull_webbing/4, False),
-        segment(joker, joker, L/4, L/4 + 1.5, False),  
+        segment(joker, joker, L/4, L/4 + 1.5, False),
+        segment(joker, joker, L/4, L/4 + 1.5, True),  
         segment(joker, joker, L/4, L/4 + 1.5, False),
         segment(joker, joker, L/4, L/4 + 1.5, False),  
        ]
