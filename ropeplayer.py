@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+from matplotlib.collections import LineCollection
 import numpy as np
 
 from config import *
@@ -33,13 +34,16 @@ class RopePlayer:
         self.ax.set_aspect("equal")
         self.ax.grid(True)
 
-        self.line, = self.ax.plot([], [], "o-", lw=2, ms=4)
+
+        self.line = LineCollection([], colors="blue")
+        self.ax.add_collection(self.line)
+        
         self.line_slackliner, = self.ax.plot([], [], "o-", lw=2, ms=4)
         self.center_marker, = self.ax.plot(
             [], [],
             "o",
             color="green",   # center point color
-            markersize=8,
+            markersize=5,
             zorder=10,
         )
 
@@ -64,12 +68,16 @@ class RopePlayer:
         x = Z[0:2*N:2]
         y = Z[1:2*N:2]
 
-        self.line.set_data(x, y)
-
-        # TODO color only parts of line red
-        self.line.set_color(
-            "red" if self.result["backup_activated"][i] else "blue"
-        )
+        points = np.column_stack((x, y))
+        segments = np.stack([points[:-1], points[1:]], axis=1)
+        
+        self.line.set_segments(segments)
+        
+        # bool vector of length N-1
+        active = self.result["backup_activated_segments"][:,i]  # adjust name
+        
+        colors = np.where(active, "red", "blue")
+        self.line.set_color(colors)
 
         pos = Z[:2*N].reshape(N, 2)
         p_slacker = Z[dofhandler.start_slackliner:dofhandler.start_slackliner+2]

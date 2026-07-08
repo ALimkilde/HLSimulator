@@ -170,6 +170,7 @@ def post_process(result, skip = 1):
     f_anchor2 = np.empty_like(result["t"])
     f_leash = np.empty_like(result["t"])
     backup_activated = np.empty_like(result["t"], dtype = bool)
+    backup_activated_segments = np.empty((N-1,len(result["t"])), dtype = bool)
     
     # Gforces in leash
     G_leash = np.zeros_like(result["t"])
@@ -208,7 +209,8 @@ def post_process(result, skip = 1):
         f_webbing[i] = np.max(F_mag_prev)
         f_anchor1[i] = F_mag_prev[0]
         f_anchor2[i] = F_mag_prev[-1]
-        backup_activated[i] = np.any(np.maximum(0.0, dist_prev - l_backup))
+        backup_activated_segments[:,i] = np.maximum(0.0, dist_prev - l_backup)
+        backup_activated[i] = np.any(backup_activated_segments[:,i])
 
         if (dofhandler.with_slackliner):
             jj = dofhandler.start_slackliner
@@ -255,6 +257,7 @@ def post_process(result, skip = 1):
         "f_leash": f_leash,
         "G_leash": G_leash,
         "backup_activated": backup_activated,
+        "backup_activated_segments": backup_activated_segments,
         "lp_start_webbing": lp_start_webbing,
         "lp_webbing": lp_webbing,
         "lp_slackliner": lp_slackliner,
