@@ -9,6 +9,7 @@ from tqdm import tqdm
 import sys
 
 from config import * # Change when we switch to segmented setups
+from polyline import project_along_y, interpolate
 
 from itertools import accumulate
 
@@ -52,7 +53,7 @@ def discretize_segments(segments, x):
     rho = np.array([segments[i].rho_main for i in idx])
     rho_backup = np.array([segments[i].rho_backup for i in idx])
 
-    l_backup = l.copy()*(L_backup/L)
+    l_backup = np.array([l[j] * segments[i].L_backup/segments[i].L_main for (j,i) in enumerate(idx)])
 
     # Mass of each interval
     interval_mass = rho * l + rho_backup * l_backup
@@ -118,12 +119,13 @@ class DoFHandler:
         else:
             v = np.array([0, -l_leash])
 
-        pos_leashring = pos[2*i_leashring:2*i_leashring + 2]
+        y_min = np.min(pos[1::2])
+        p_slacker = np.array([x_slacker, y_min]) # TODO maybe a hack?
 
         if (pos.size <= self.offset):
-            pos = np.concatenate((pos, pos_leashring + v))
+            pos = np.concatenate((pos, p_slacker + v))
         elif (pos.size >= self.offset):
-            pos[self.start_slackliner: self.start_slackliner+2]  = pos_leashring + v
+            pos[self.start_slackliner: self.start_slackliner+2]  = p_slacker + v
 
         return pos
 
@@ -198,9 +200,10 @@ def post_process(result, skip = 1):
         if (dofhandler.with_slackliner):
             jj = dofhandler.start_slackliner
             zslackliner = Z[jj: jj+2]
-            zleashring = Z[2*i_leashring:2*i_leashring+2]
+    
+            proj, dist, _, _, _ = project_along_y(zslackliner, pos)
 
-            f_leash[i] = tension(zleashring, zslackliner, kl_leash, l_leash)
+            f_leash[i] = tension(proj, zslackliner, kl_leash, l_leash)
             if (i > 0):
                 i_prev = i - 20
                 dt = result["t"][i] - result["t"][i_prev]
@@ -250,18 +253,11 @@ def leash_event(t, Z):
     if not dofhandler.with_slackliner:
         return 1.0  # never trigger
 
-    z_ring = Z[2*i_leashring:2*i_leashring + 2]
+    pos = Z[:2*N].reshape(N, 2)
 
-    i = dofhandler.start_slackliner
-    z_slack = Z[i:i+2]
+    p_slacker = Z[dofhandler.start_slackliner:dofhandler.start_slackliner+2]
 
-    dist = np.linalg.norm(z_slack - z_ring) 
-
-    # v_ring = Z[2*i_leashring + dofhandler.offset:2*i_leashring + dofhandler.offset + 2]
-    # v_slack = Z[i + dofhandler.offset:i + dofhandler.offset + 2]
-    # velocity_innerprod = np.dot(v_ring, v_slack)
-    # if (velocity_innerprod > 0):
-    #     return 1.0
+    _, dist, _, _, _ = project_along_y(p_slacker, pos)
 
     return dist - l_leash
 
@@ -273,11 +269,19 @@ def apply_collision(Z):
 
     Z = Z.copy()
 
-    ring = i_leashring
+    pos = Z[:2*N].reshape(N, 2)
+    p_slacker = Z[dofhandler.start_slackliner:dofhandler.start_slackliner+2]
+    _, dist, i_prev, i_next, alpha = project_along_y(p_slacker, pos)
 
     # ring velocity
-    i_ring = dofhandler.offset + 2*ring
-    v_ring = Z[i_ring:i_ring+2]
+    i_vel_prev = dofhandler.offset + 2*i_prev
+    v_prev = Z[i_vel_prev:i_vel_prev+2]
+
+    i_vel_next = dofhandler.offset + 2*i_next
+    v_next = Z[i_vel_next:i_vel_next+2]
+
+    v_ring = interpolate(v_prev, v_next, alpha)
+    m_ring = interpolate(m[i_prev-1], m[i_next-1], alpha)# TODO make function to map i_pos to i_mass
 
     # slackliner velocity
     i_slack = dofhandler.start_slackliner + dofhandler.offset
@@ -285,16 +289,18 @@ def apply_collision(Z):
 
     # momentum-conserving velocity
     v = (
-        m[i_leashring]*v_ring +
+        m_ring*v_ring + 
         m_slackliner*v_slack
-    )/(m[i_leashring] + m_slackliner)
+    )/(m_ring + m_slackliner)
 
     # Update velocities
-    Z[i_ring:i_ring+2] = v
+    Z[i_vel_prev:i_vel_prev+2] = v 
+    Z[i_vel_next:i_vel_next+2] = v
     Z[i_slack:i_slack+2] = v
 
     # Slightly modify leash position to avoid retriggering event
-    Z[2*ring+1] = Z[2*ring + 1] + 1E-12
+    Z[2*i_prev+1] += 1E-12
+    Z[2*i_next+1] += 1E-12
 
     return Z
 
@@ -360,21 +366,20 @@ def ODE_rhs_vectorized(t, Z):
 
     if dofhandler.with_slackliner:
 
-        ring = i_leashring
-
-        z_ring = pos[ring]
         z_slack = Z[dofhandler.start_slackliner:
                     dofhandler.start_slackliner+2]
 
-        d = z_slack - z_ring
-        dist = np.linalg.norm(d)
+        proj, dist, i_prev, i_next, alpha = project_along_y(z_slack, pos)
+
+        d = z_slack - proj
 
         if dist > l_leash:
-
             beta = (dist - l_leash)/l_leash
             F_leash = kl_leash * beta * d/dist
 
-            F[ring-1] += F_leash
+            F[i_prev-1] += (1-alpha)*F_leash # TODO Make a mapping from i_pos to i_mass/force
+            F[i_next-1] += alpha    *F_leash
+            # ====================================================
 
 
     ############################################################
@@ -399,14 +404,10 @@ def ODE_rhs_vectorized(t, Z):
 
         i = dofhandler.start_slackliner
 
-        z_slack = Z[i:i+2]
-        z_ring = pos[i_leashring, :]
         vel_slack = Z[i + dofhandler.offset: i +dofhandler.offset+2]
         vel_norm = np.linalg.norm(vel_slack)
 
-        d = z_ring - z_slack
-        dist = np.linalg.norm(d)
-
+        d = proj - z_slack
         if dist > l_leash:
             beta = (dist-l_leash)/l_leash
             F_slack = m_slackliner*g + kl_leash*beta*d/dist
@@ -491,7 +492,10 @@ def static_rhs(Z):
     masses = m.copy()
 
     if dofhandler.with_slackliner:
-        masses[i_leashring-1] += m_slackliner
+        p_slacker = np.array([x_slacker, np.min(pos[:,1])]) # TODO maybe a hack?
+        _, dist, i_prev, i_next, alpha = project_along_y(p_slacker, pos)
+        masses[i_prev-1] += (1-alpha)*m_slackliner
+        masses[i_next-1] += alpha    *m_slackliner
 
     F = masses[:,None]*g + F_prev + F_next
 

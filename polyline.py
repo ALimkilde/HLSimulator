@@ -1,68 +1,52 @@
 import numpy as np
 
-def project_point_to_polyline(point, vertices):
-    """
-    Project a point onto a polyline.
+def interpolate(a,b,alpha):
+    return (1-alpha)*a + alpha*b
 
-    Parameters
-    ----------
-    point : (D,) array_like
-        Point to project.
-    vertices : (N, D) array_like
-        Vertices of the polyline.
+import numpy as np
+
+def project_along_y(point, vertices):
+    """
+    Project a point vertically onto a polyline.
 
     Returns
     -------
-    projection : (D,) ndarray
-        Closest point on the polyline.
-    distance : float
-        Euclidean distance to the polyline.
-    segment : int
-        Index of the closest segment (between vertices[segment] and vertices[segment+1]).
+    projection : (2,) ndarray
+    segment0 : int
+    segment1 : int
     alpha : float
-        Parameter along the segment in [0, 1].
     """
 
-    point = np.asarray(point, dtype=float)
-    vertices = np.asarray(vertices, dtype=float)
+    x = point[0]
 
-    if len(vertices) < 2:
-        raise ValueError("Polyline must contain at least two vertices.")
-
-    # Segment start/end points
     a = vertices[:-1]
     b = vertices[1:]
 
-    # Segment vectors
-    d = b - a
+    x0 = a[:, 0]
+    x1 = b[:, 0]
 
-    # Squared lengths
-    lengths_sq = np.sum(d * d, axis=1)
+    # Segments whose x-range contains x
+    mask = ((x0 <= x) & (x <= x1)) | ((x1 <= x) & (x <= x0))
 
-    # Handle zero-length segments
-    valid = lengths_sq > 0
+    if not np.any(mask):
+        raise ValueError("x-coordinate does not intersect the polyline.")
 
-    alpha = np.zeros(len(d))
-    alpha[valid] = np.sum((point - a[valid]) * d[valid], axis=1) / lengths_sq[valid]
+    # First intersecting segment
+    seg = np.flatnonzero(mask)[0]
 
-    # Clamp to segment
-    alpha = np.clip(alpha, 0.0, 1.0)
+    dx = x1[seg] - x0[seg]
 
-    # Closest point on each segment
-    projections = a + alpha[:, None] * d
+    if dx == 0:
+        alpha = 0.0
+        y = a[seg, 1]
+    else:
+        alpha = (x - x0[seg]) / dx
+        y = a[seg, 1] + alpha * (b[seg, 1] - a[seg, 1])
 
-    # Squared distances
-    dist_sq = np.sum((projections - point) ** 2, axis=1)
+    proj = np.array([x, y])
+    dist = np.linalg.norm(proj - point)
 
-    # Best segment
-    segment = np.argmin(dist_sq)
-
-    return (
-        projections[segment],
-        np.sqrt(dist_sq[segment]),
-        segment,
-        alpha[segment],
-    )
+    return proj, dist, seg, seg + 1, alpha
 
 # --------------------------------------------------------------------
 # Example
@@ -78,9 +62,10 @@ if __name__ == "__main__":
     
     point = np.array([4, 5.0])
     
-    proj, dist, seg, alpha = project_point_to_polyline(point, polyline)
+    proj, dist, iprev, inext, alpha = project_point_to_polyline(point, polyline)
     
     print("Projection:", proj)
     print("Distance:  ", dist)
-    print("Segment:   ", seg)
+    print("i_prev:    ", i_prev)
+    print("i_next:    ", i_next)
     print("Alpha:     ", alpha)

@@ -48,14 +48,18 @@ solid = webbing(stretch_pct = 2.5,  tension_kN = 5, weight_g_m = 50)
 y2k   = webbing(stretch_pct = 1.0,  tension_kN = 5, weight_g_m = 33) 
 
 # Webbings and line
-L = 100             # Line length [m]
-L_backup = L + 3
+L = 110             # Line length [m]
 pull_webbing = -2.0
 
 # Segmented setup
-# segs = [ segment(joker, solid, L, L_backup, True) ]
-segs = [ segment(joker, solid, L/2, L_backup/2, True),
-         segment(joker, solid, L/2, L_backup/2, False),  ]
+# segs = [ segment(joker, solid, L, L_backup, False) ]
+print(f"Defacto backup length: {1.5 + pull_webbing/4}")
+segs = [ 
+        segment(joker, joker, L/4, L/4 + 1.5 + pull_webbing/4, False),
+        segment(joker, joker, L/4, L/4 + 1.5, False),  
+        segment(joker, joker, L/4, L/4 + 1.5, False),
+        segment(joker, joker, L/4, L/4 + 1.5, False),  
+       ]
 
 # Experiment
 break_mainline = False
@@ -68,12 +72,12 @@ l_leg = 1.1        # Length of legs [m] (until harness connection point)
 kl_leash = 200*1E3 # Spring constant times length - Leash
 
 # Discretization
-N = 31             # Discretization
-i_leashring = int(N/2)  # id of pt with slackliner hanging/standing
+N = 101             # Discretization
+x_slacker = L/2  # x value of slackliner
 zeta = 0.005        # Dampening parameter for linear dampening
 detect_collision = True
 
 
 # ODE setting
 t0 = 0
-t1 = 0.08
+t1 = 5

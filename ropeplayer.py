@@ -4,6 +4,7 @@ import numpy as np
 
 from config import *
 from simulation import dofhandler
+from polyline import project_along_y, interpolate
 
 
 class RopePlayer:
@@ -34,6 +35,13 @@ class RopePlayer:
 
         self.line, = self.ax.plot([], [], "o-", lw=2, ms=4)
         self.line_slackliner, = self.ax.plot([], [], "o-", lw=2, ms=4)
+        self.center_marker, = self.ax.plot(
+            [], [],
+            "o",
+            color="green",   # center point color
+            markersize=8,
+            zorder=10,
+        )
 
         self.fig.canvas.mpl_connect("key_press_event", self.on_key)
 
@@ -63,10 +71,17 @@ class RopePlayer:
             "red" if self.result["backup_activated"][i] else "blue"
         )
 
-        xs = [Z[2*i_leashring], Z[dofhandler.start_slackliner]]
-        ys = [Z[2*i_leashring+1], Z[dofhandler.start_slackliner+1]]
+        pos = Z[:2*N].reshape(N, 2)
+        p_slacker = Z[dofhandler.start_slackliner:dofhandler.start_slackliner+2]
+        proj, _, _, _, _ = project_along_y(p_slacker, pos)
+        xs = [proj[0], p_slacker[0]]
+        ys = [proj[1], p_slacker[1]]
 
         self.line_slackliner.set_data(xs, ys)
+
+        # Highlight center point
+        center = N // 2
+        self.center_marker.set_data([x[center]], [y[center]])
 
         t=self.result['t'][i]
         f_w = self.result["f_webbing"][i]
