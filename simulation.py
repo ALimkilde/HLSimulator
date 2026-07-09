@@ -339,45 +339,27 @@ def ODE_rhs_vectorized(t, Z):
     # Spring forces
     ############################################################
 
-    # edge vectors between adjacent nodes
-    d_edge = pos[1:] - pos[:-1]
-    
-    # edge lengths (N-1 values)
-    dist_edge = np.sqrt(d_edge[:,0]**2 + d_edge[:,1]**2)
-    
-    # for interior nodes:
-    d_prev = d_edge[:-1]
-    d_next = d_edge[1:]
-    
-    dist_prev = dist_edge[:-1]
-    dist_next = dist_edge[1:]
-
-    # Precompute spring constant TODO Move fully outside loop
     k = kl / l
     k_backup = kl_backup / l_backup
 
-    main_prev = k[:-1] * np.maximum(dist_prev - l[:-1], 0.0) 
-    main_next = k[1:]  * np.maximum(dist_next - l[1:], 0.0) 
+    d_edge = pos[1:] - pos[:-1]
+    dist_edge = np.sqrt(d_edge[:,0]**2 + d_edge[:,1]**2)
     
-    backup_prev = k_backup[:-1] * np.maximum(dist_prev - l_backup[:-1], 0.0) 
-    backup_next = k_backup[1:]  * np.maximum(dist_next - l_backup[1:], 0.0)
+    stretch = np.maximum(dist_edge - l, 0)
     
-    kl_beta_prev = np.where(
-        break_mainline[:-1],
-        backup_prev,
-        main_prev + backup_prev,
-    )
+    main = k * stretch
     
-    kl_beta_next = np.where(
-        break_mainline[1:],
-        backup_next,
-        main_next + backup_next,
-    )
+    backup = k_backup * np.maximum(dist_edge - l_backup, 0)
+    
+    beta = main + backup
+    beta[break_mainline] = backup[break_mainline]
+    
+    scale = beta / dist_edge
 
-    F_prev = -kl_beta_prev[:, None] * d_prev / dist_prev[:, None]
-    F_next = kl_beta_next[:, None] * d_next / dist_next[:, None]
-
-    F = m[:, None] * g + F_prev + F_next
+    F = m[:, None]*g
+    
+    F -= d_edge[:-1] * scale[:-1,None]
+    F += d_edge[1:]  * scale[1:,None]
 
     ############################################################
     # Slackliner
@@ -407,7 +389,7 @@ def ODE_rhs_vectorized(t, Z):
 
     vel_norm = np.sqrt(vel[1:-1,0]**2 + vel[1:-1,1]**2)
 
-    drag_coef = 0.5 * rho_air * C_D * (dist_prev + dist_next) * webbing_width/2
+    drag_coef = 0.5 * rho_air * C_D * (dist_edge[1:] + dist_edge[:-1]) * webbing_width/2
     acc = (F - drag_coef[:, None]*vel[1:-1]*vel_norm[:, None])/m[:, None]
 
     out[dofhandler.offset+2:
