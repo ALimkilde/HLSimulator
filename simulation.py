@@ -67,18 +67,18 @@ def discretize_segments(segments, x):
 
 g = np.array([0, -9.82])
 
-kl, m, l, kl_backup, l_backup, rho, rho_backup, break_mainline, seg_ids = discretize_segments(segs, np.linspace(0,L,N))
+spacings = np.linspace(0,L,N)
 
-c = zeta *2*np.sqrt(m[0]*kl[0]/l[0])             # dampening TODO
-cslack = 0.0 #zeta *2*math.sqrt(m*kl/(l*m_slackliner))
+kl, m, l, kl_backup, l_backup, rho, rho_backup, break_mainline, seg_ids = discretize_segments(segs, spacings)
 
+rho_air = 1.225 # [kg/m^3]
+C_D = 1.15 # Drag coeff of rectangle
 
 # progress bar
 pbar = tqdm(total=t1 - t0, unit = "sim s", unit_scale=False)
 last_t = t0
 last_update = t0
 update_every = 0.01  # simulated seconds
-
 
 # Degrees of Freedom handler for ODE
 @dataclass
@@ -393,10 +393,8 @@ def ODE_rhs_vectorized(t, Z):
 
     vel_norm = np.linalg.norm(vel[1:-1], axis=1)
 
-    acc = (
-        F/m[:, None]
-        - c*vel[1:-1]*vel_norm[:, None]
-    )
+    drag_coef = 0.5 * rho_air * C_D * (dist_prev + dist_next) * webbing_width/2
+    acc = (F - drag_coef[:, None]*vel[1:-1]*vel_norm[:, None])/m[:, None]
 
     out[dofhandler.offset+2:
         dofhandler.offset+2*(n_nodes-1)] = acc.reshape(-1)
@@ -420,7 +418,7 @@ def ODE_rhs_vectorized(t, Z):
             F_slack = m_slackliner*g
 
         out[i+dofhandler.offset:i+dofhandler.offset+2] = (
-            F_slack/m_slackliner - cslack*vel_slack*vel_norm
+            F_slack/m_slackliner #- cslack*vel_slack*vel_norm # TODO dampening on slacker?
         )
 
     return out
@@ -517,10 +515,9 @@ def get_initial_pos_from_tension(T_kN = 2):
     s = mass * L / (4*T_kg)
     a = -2*s/L
 
-    x = np.linspace(0, L, N)
-    y = np.maximum(x*a, (L-x)*a) 
+    y = np.maximum(spacings*a, (L-spacings)*a) 
 
-    positions = np.column_stack((x, y)).ravel()
+    positions = np.column_stack((spacings, y)).ravel()
 
     return positions
 
@@ -528,6 +525,7 @@ def get_static_position(pos = None):
     if (pos is None):
         w_line = np.sum(m)
         pos = get_initial_pos_from_tension(T_kN = w_line*9.82/1000)
+        # pos = get_initial_pos_from_tension(T_kN = 0.05)
 
     sol, info, ier, mesg = fsolve(static_rhs, pos, full_output=True)
 
@@ -599,8 +597,8 @@ def simulate(pos = None):
         Z,
         t0,
         t1,
-        rtol=1e-5,
-        atol=1e-6,
+        rtol=1e-12,
+        atol=1e-12,
     )
 
     result = post_process(result, skip = 1) # Add postprocessing to results

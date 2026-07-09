@@ -48,6 +48,7 @@ solid = webbing(stretch_pct = 2.5,  tension_kN = 5, weight_g_m = 50)
 y2k   = webbing(stretch_pct = 1.0,  tension_kN = 5, weight_g_m = 33) 
 
 # Webbings and line
+webbing_width = 0.0254 # [m]
 L = 275             # Line length [m]
 pull_webbing = -1.0
 
@@ -79,9 +80,8 @@ l_leg = 1.1        # Length of legs [m] (until harness connection point)
 kl_leash = 200*1E3 # Spring constant times length - Leash
 
 # Discretization
-N = 101             # Discretization
+N = 31             # Discretization
 x_slacker = 130  # x value of slackliner
-zeta = 0.001        # Dampening parameter for linear dampening
 detect_collision = True
 
 

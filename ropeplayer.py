@@ -37,6 +37,8 @@ class RopePlayer:
 
         self.line = LineCollection([], colors="blue")
         self.ax.add_collection(self.line)
+
+        self.markers = self.ax.scatter([], [], color="black", s=20)
         
         self.line_slackliner, = self.ax.plot([], [], "o-", lw=2, ms=4)
         self.center_marker, = self.ax.plot(
@@ -86,6 +88,8 @@ class RopePlayer:
         ys = [proj[1], p_slacker[1]]
 
         self.line_slackliner.set_data(xs, ys)
+ 
+        self.markers.set_offsets(points)
 
         # Highlight center point
         center = N // 2
