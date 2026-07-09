@@ -4,6 +4,7 @@ def interpolate(a,b,alpha):
     return (1-alpha)*a + alpha*b
 
 import numpy as np
+from config import *
 
 def project_along_y(point, vertices):
     """
@@ -46,7 +47,16 @@ def project_along_y(point, vertices):
     proj = np.array([x, y])
     dist = np.linalg.norm(proj - point)
 
-    return proj, dist, seg, seg + 1, alpha
+    i_prev = seg
+    i_next = seg+1
+
+    if (i_next >= N-1):
+        i_next = i_prev
+
+    if (i_prev <= 0):
+        i_prev = i_next
+
+    return proj, dist, i_prev, i_next, alpha
 
 # --------------------------------------------------------------------
 # Example

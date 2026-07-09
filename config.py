@@ -48,17 +48,24 @@ solid = webbing(stretch_pct = 2.5,  tension_kN = 5, weight_g_m = 50)
 y2k   = webbing(stretch_pct = 1.0,  tension_kN = 5, weight_g_m = 33) 
 
 # Webbings and line
-L = 110             # Line length [m]
-pull_webbing = -2.0
+L = 275             # Line length [m]
+pull_webbing = -1.0
 
 # Segmented setup
 # segs = [ segment(joker, solid, L, L_backup, False) ]
-print(f"Defacto backup length: {1.5 + pull_webbing/4}")
+# segs = [ 
+#         segment(joker, joker, L/4, L/4 + 1.5, False),
+#         segment(joker, joker, L/4, L/4 + 1.5, False),  
+#         segment(joker, joker, L/4, L/4 + 1.5, False),
+#         segment(joker, joker, L/4, L/4 + 1.5, False),  
+#        ]
+
 segs = [ 
-        segment(joker, joker, L/4, L/4 + 1.5, False),
-        segment(joker, joker, L/4, L/4 + 1.5, False),  
-        segment(joker, joker, L/4, L/4 + 1.5, True),
-        segment(joker, joker, L/4, L/4 + 1.5, False),  
+        segment(y2k, y2k, 50, 53, True),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(joker, joker, 25, 26, False),
        ]
 
 # Experiment
@@ -73,8 +80,8 @@ kl_leash = 200*1E3 # Spring constant times length - Leash
 
 # Discretization
 N = 101             # Discretization
-x_slacker = L/2  # x value of slackliner
-zeta = 0.005        # Dampening parameter for linear dampening
+x_slacker = 130  # x value of slackliner
+zeta = 0.001        # Dampening parameter for linear dampening
 detect_collision = True
 
 

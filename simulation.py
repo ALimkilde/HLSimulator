@@ -69,14 +69,7 @@ def discretize_segments(segments, x):
 rho = segs[0].rho_main        # Density [kg/m] (main) - Joker 
 rho_backup = segs[0].rho_backup # Density [kg/m] (main) - Mamba
 
-# elasticity
-# kl = np.full(N-1, segs[0].kl_main)
-# kl_backup = np.full(N-1, segs[0].kl_backup)
-
 g = np.array([0, -9.82])
-# l = np.full(N-1, L/(N-1))                 # length of discretized line segment
-# l_backup = np.full(N-1,L_backup/(N-1))    # length of discretized line segment
-# m = np.full(N-2, (L*rho + L_backup*rho_backup)/(N-2)) # mass of point [kg] TODO
 
 kl, m, l, kl_backup, l_backup, break_mainline, seg_ids = discretize_segments(segs, np.linspace(0,L,N))
 
@@ -266,7 +259,7 @@ def post_process(result, skip = 1):
     return result
 
 def leash_event(t, Z):
-    if not dofhandler.with_slackliner:
+    if (not dofhandler.with_slackliner or not detect_collision):
         return 1.0  # never trigger
 
     pos = Z[:2*N].reshape(N, 2)
@@ -510,6 +503,7 @@ def static_rhs(Z):
     if dofhandler.with_slackliner:
         p_slacker = np.array([x_slacker, np.min(pos[:,1])]) # TODO maybe a hack?
         _, dist, i_prev, i_next, alpha = project_along_y(p_slacker, pos)
+
         masses[i_prev-1] += (1-alpha)*m_slackliner
         masses[i_next-1] += alpha    *m_slackliner
 
@@ -537,7 +531,6 @@ def get_initial_pos_from_tension(T_kN = 2):
 def get_static_position(pos = None):
     if (pos is None):
         w_line = np.sum(m)
-        print(f"wline: {w_line}")
         pos = get_initial_pos_from_tension(T_kN = w_line*9.82/1000)
         # pos = get_initial_pos_from_tension(T_kN = 0.5)
 
@@ -611,8 +604,8 @@ def simulate(pos = None):
         Z,
         t0,
         t1,
-        rtol=1e-8,
-        atol=1e-10,
+        rtol=1e-5,
+        atol=1e-6,
     )
 
     result = post_process(result, skip = 1) # Add postprocessing to results
