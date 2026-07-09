@@ -63,15 +63,11 @@ def discretize_segments(segments, x):
 
     break_mainline = np.array([segments[i].break_mainline for i in idx], dtype=bool)
 
-    return kl, m, l, kl_backup, l_backup, break_mainline, idx
-
-# weight
-rho = segs[0].rho_main        # Density [kg/m] (main) - Joker 
-rho_backup = segs[0].rho_backup # Density [kg/m] (main) - Mamba
+    return kl, m, l, kl_backup, l_backup, rho, rho_backup, break_mainline, idx
 
 g = np.array([0, -9.82])
 
-kl, m, l, kl_backup, l_backup, break_mainline, seg_ids = discretize_segments(segs, np.linspace(0,L,N))
+kl, m, l, kl_backup, l_backup, rho, rho_backup, break_mainline, seg_ids = discretize_segments(segs, np.linspace(0,L,N))
 
 c = zeta *2*np.sqrt(m[0]*kl[0]/l[0])             # dampening TODO
 cslack = 0.0 #zeta *2*math.sqrt(m*kl/(l*m_slackliner))
@@ -517,7 +513,7 @@ def static_rhs(Z):
 # the line will sag to yield a tension of T_kN
 def get_initial_pos_from_tension(T_kN = 2):
     T_kg = 1000.0/9.82 * T_kN
-    mass = m_slackliner + rho*L
+    mass = m_slackliner + np.sum(m)
     s = mass * L / (4*T_kg)
     a = -2*s/L
 
@@ -532,7 +528,6 @@ def get_static_position(pos = None):
     if (pos is None):
         w_line = np.sum(m)
         pos = get_initial_pos_from_tension(T_kN = w_line*9.82/1000)
-        # pos = get_initial_pos_from_tension(T_kN = 0.5)
 
     sol, info, ier, mesg = fsolve(static_rhs, pos, full_output=True)
 
