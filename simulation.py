@@ -43,6 +43,10 @@ def discretize_segments(segments, x):
     # Segment boundaries
     bounds = np.array([0.0, *accumulate(s.L_main for s in segments)])
 
+    if (bounds[-1] < x[-1]):
+        print(f" Webbing not long enough. {bounds[-1]}m webbing doesn't bridge the {x[-1]}m gap")
+        sys.exit()
+
     # Segment index for each interval
     idx = np.searchsorted(bounds, mid, side="right") - 1
     idx = np.clip(idx, 0, len(segments) - 1)
@@ -335,18 +339,28 @@ def ODE_rhs_vectorized(t, Z):
     # Spring forces
     ############################################################
 
-    # vectors to previous and next nodes
-    d_prev = pos[:-2,:] - pos[1:-1,:]
-    d_next = pos[2:,:]  - pos[1:-1,:]
-
-    dist_prev = np.linalg.norm(d_prev, axis=1)
-    dist_next = np.linalg.norm(d_next, axis=1)
-
-    main_prev = kl[:-1] * np.maximum(dist_prev - l[:-1], 0.0) / l[:-1]
-    main_next = kl[1:]  * np.maximum(dist_next - l[1:], 0.0) / l[1:]
+    # edge vectors between adjacent nodes
+    d_edge = pos[1:] - pos[:-1]
     
-    backup_prev = kl_backup[:-1] * np.maximum(dist_prev - l_backup[:-1], 0.0) / l_backup[:-1]
-    backup_next = kl_backup[1:]  * np.maximum(dist_next - l_backup[1:], 0.0) / l_backup[1:]
+    # edge lengths (N-1 values)
+    dist_edge = np.sqrt(d_edge[:,0]**2 + d_edge[:,1]**2)
+    
+    # for interior nodes:
+    d_prev = d_edge[:-1]
+    d_next = d_edge[1:]
+    
+    dist_prev = dist_edge[:-1]
+    dist_next = dist_edge[1:]
+
+    # Precompute spring constant TODO Move fully outside loop
+    k = kl / l
+    k_backup = kl_backup / l_backup
+
+    main_prev = k[:-1] * np.maximum(dist_prev - l[:-1], 0.0) 
+    main_next = k[1:]  * np.maximum(dist_next - l[1:], 0.0) 
+    
+    backup_prev = k_backup[:-1] * np.maximum(dist_prev - l_backup[:-1], 0.0) 
+    backup_next = k_backup[1:]  * np.maximum(dist_next - l_backup[1:], 0.0)
     
     kl_beta_prev = np.where(
         break_mainline[:-1],
@@ -360,7 +374,7 @@ def ODE_rhs_vectorized(t, Z):
         main_next + backup_next,
     )
 
-    F_prev = kl_beta_prev[:, None] * d_prev / dist_prev[:, None]
+    F_prev = -kl_beta_prev[:, None] * d_prev / dist_prev[:, None]
     F_next = kl_beta_next[:, None] * d_next / dist_next[:, None]
 
     F = m[:, None] * g + F_prev + F_next
@@ -391,7 +405,7 @@ def ODE_rhs_vectorized(t, Z):
     # Drag + acceleration
     ############################################################
 
-    vel_norm = np.linalg.norm(vel[1:-1], axis=1)
+    vel_norm = np.sqrt(vel[1:-1,0]**2 + vel[1:-1,1]**2)
 
     drag_coef = 0.5 * rho_air * C_D * (dist_prev + dist_next) * webbing_width/2
     acc = (F - drag_coef[:, None]*vel[1:-1]*vel_norm[:, None])/m[:, None]
@@ -524,8 +538,8 @@ def get_initial_pos_from_tension(T_kN = 2):
 def get_static_position(pos = None):
     if (pos is None):
         w_line = np.sum(m)
-        pos = get_initial_pos_from_tension(T_kN = w_line*9.82/1000)
-        # pos = get_initial_pos_from_tension(T_kN = 0.05)
+        # pos = get_initial_pos_from_tension(T_kN = w_line*9.82/1000)
+        pos = get_initial_pos_from_tension(T_kN = 0.05)
 
     sol, info, ier, mesg = fsolve(static_rhs, pos, full_output=True)
 

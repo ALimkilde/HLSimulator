@@ -127,19 +127,19 @@ class RopePlayer:
             self.playing = not self.playing
 
         elif event.key == "right":
-            self.frame = min(self.frame + 10, self.Nframes - 1)
+            self.frame = min(self.frame + 1, self.Nframes - 1)
             self.draw_frame(self.frame)
 
         elif event.key == "left":
-            self.frame = max(self.frame - 10, 0)
+            self.frame = max(self.frame - 1, 0)
             self.draw_frame(self.frame)
 
         elif event.key == "shift+right":
-            self.frame = min(self.frame + 100, self.Nframes - 1)
+            self.frame = min(self.frame + 10, self.Nframes - 1)
             self.draw_frame(self.frame)
 
         elif event.key == "shift+left":
-            self.frame = max(self.frame - 100, 0)
+            self.frame = max(self.frame - 10, 0)
             self.draw_frame(self.frame)
 
         elif event.key == "home":

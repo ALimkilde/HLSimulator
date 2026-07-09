@@ -43,14 +43,15 @@ class segment:
         self.break_mainline = break_mainline
 
 # Webbings
+pinktube = webbing(stretch_pct = 15.4,  tension_kN = 5, weight_g_m = 54) 
 joker = webbing(stretch_pct = 3.6,  tension_kN = 5, weight_g_m = 54) 
 solid = webbing(stretch_pct = 2.5,  tension_kN = 5, weight_g_m = 50) 
 y2k   = webbing(stretch_pct = 1.0,  tension_kN = 5, weight_g_m = 33) 
 
 # Webbings and line
 webbing_width = 0.0254 # [m]
-L = 275             # Line length [m]
-pull_webbing = -1.0
+L = 200             # Line length [m]
+pull_webbing = -1.5
 
 # Segmented setup
 # segs = [ segment(joker, solid, L, L_backup, False) ]
@@ -62,11 +63,10 @@ pull_webbing = -1.0
 #        ]
 
 segs = [ 
-        segment(y2k, y2k, 50, 53, True),
         segment(y2k, y2k, 50, 53, False),
         segment(y2k, y2k, 50, 53, False),
         segment(y2k, y2k, 50, 53, False),
-        segment(joker, joker, 25, 26, False),
+        segment(joker, solid, 50, 52, False),
        ]
 
 # Experiment
@@ -81,7 +81,7 @@ kl_leash = 200*1E3 # Spring constant times length - Leash
 
 # Discretization
 N = 31             # Discretization
-x_slacker = 130  # x value of slackliner
+x_slacker = 100  # x value of slackliner
 detect_collision = True
 
 

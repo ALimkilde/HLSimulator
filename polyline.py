@@ -6,6 +6,7 @@ def interpolate(a,b,alpha):
 import numpy as np
 from config import *
 
+
 def project_along_y(point, vertices):
     """
     Project a point vertically onto a polyline.
@@ -20,32 +21,23 @@ def project_along_y(point, vertices):
 
     x = point[0]
 
-    a = vertices[:-1]
-    b = vertices[1:]
+    n,m = vertices.shape
+    seg = np.searchsorted(vertices[:, 0], x, side="right") - 1
 
-    x0 = a[:, 0]
-    x1 = b[:, 0]
-
-    # Segments whose x-range contains x
-    mask = ((x0 <= x) & (x <= x1)) | ((x1 <= x) & (x <= x0))
-
-    if not np.any(mask):
+    if seg < 0 or seg >= len(vertices)-1:
         raise ValueError("x-coordinate does not intersect the polyline.")
 
-    # First intersecting segment
-    seg = np.flatnonzero(mask)[0]
-
-    dx = x1[seg] - x0[seg]
+    dx = vertices[seg+1,0] - vertices[seg,0]
 
     if dx == 0:
         alpha = 0.0
-        y = a[seg, 1]
+        y = vertices[seg, 1]
     else:
-        alpha = (x - x0[seg]) / dx
-        y = a[seg, 1] + alpha * (b[seg, 1] - a[seg, 1])
+        alpha = (x - vertices[seg,0]) / dx
+        y = vertices[seg, 1] + alpha * (vertices[seg+1, 1] - vertices[seg, 1])
 
     proj = np.array([x, y])
-    dist = np.linalg.norm(proj - point)
+    dist = np.sqrt((proj[0] - point[0])**2 + (proj[1] - point[1])**2)
 
     i_prev = seg
     i_next = seg+1
