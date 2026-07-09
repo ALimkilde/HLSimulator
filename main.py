@@ -105,8 +105,8 @@ def main():
     result = simulate()
 
     # animate_rope(result)
-    # player = RopePlayer(result)
-    # plt.show()
+    player = RopePlayer(result)
+    plt.show()
 
 if __name__ == "__main__":
     main()

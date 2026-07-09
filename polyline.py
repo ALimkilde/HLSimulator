@@ -70,12 +70,12 @@ if __name__ == "__main__":
         [4, 0]
     ])
     
-    point = np.array([4, 5.0])
+    point = np.array([2, 1.0])
     
-    proj, dist, iprev, inext, alpha = project_point_to_polyline(point, polyline)
+    proj, dist, iprev, inext, alpha = project_along_y(point, polyline)
     
     print("Projection:", proj)
     print("Distance:  ", dist)
-    print("i_prev:    ", i_prev)
-    print("i_next:    ", i_next)
+    print("i_prev:    ", iprev)
+    print("i_next:    ", inext)
     print("Alpha:     ", alpha)
