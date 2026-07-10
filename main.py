@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import math
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
@@ -99,14 +100,140 @@ def plot_static_position(pos):
     plt.title(f"Tension = {compute_tension_mainline(pos)/1000} kN")
     print(f"Tension = {compute_tension_mainline(pos)/1000} kN")
 
+# ---------------------------------------------------------------------
+# Adjust these indices to match your state vector
+# ---------------------------------------------------------------------
+IDX_HEIGHT = 2*N+1          # slackliner's vertical position
+IDX_DISTANCE = 2*N        # horizontal distance from left anchor (example)
+# ---------------------------------------------------------------------
+
+def state_at(result, idx, start = False):
+    """Extract quantities at one time index."""
+
+    h = result["y"][IDX_HEIGHT, idx] - l_leg
+
+    return {
+        "height": h,
+        "distance": np.nan,
+        "left": result["f_anchor1"][idx] / 1000,   # N -> kN
+        "right": result["f_anchor2"][idx] / 1000,
+        "leash": result["f_leash"][idx] / 1000,
+        "standing": result["f_standing"] / 1000,
+    }
+
+
+def summarize_results(result_leashfall, result_backupfall):
+    rows = []
+
+    # ---------------------------------------------------------------
+    # Walking (initial state)
+    # ---------------------------------------------------------------
+    s = state_at(result_leashfall, 0, start = True)
+
+    w = result_leashfall["w_line"]
+    print(f"Weight of line: {w}kg")
+
+    rows.append({
+        "Situation": "Standing",
+        "Slackliner's height (m)": np.nan,
+        "Distance from anchor": np.nan,
+        "Tension - left side (kN)": s["standing"],
+        "Tension - right side (kN)": s["standing"],
+        "Tension - leash (kN)": np.nan,
+        })
+
+    rows.append({
+        "Situation": "Walking",
+        "Slackliner's height (m)": s["height"],
+        "Distance from anchor": s["distance"],
+        "Tension - left side (kN)": s["left"],
+        "Tension - right side (kN)": s["right"],
+        "Tension - leash (kN)": np.nan,
+    })
+
+    # ---------------------------------------------------------------
+    # Leash fall (maximum leash force)
+    # ---------------------------------------------------------------
+    h = np.min(result_leashfall["y"][IDX_HEIGHT,:])
+    f_a1 = np.max(result_leashfall["f_anchor1"])/1000
+    f_a2 = np.max(result_leashfall["f_anchor2"])/1000
+    f_leash = np.max(result_leashfall["f_leash"])/1000
+
+    rows.append({
+        "Situation": "Leash fall",
+        "Slackliner's height (m)": h,
+        "Distance from anchor": np.nan,
+        "Tension - left side (kN)": f_a1,
+        "Tension - right side (kN)": f_a2,
+        "Tension - leash (kN)": f_leash,
+    })
+
+    # ---------------------------------------------------------------
+    # Backup fall - impact (maximum leash force)
+    # ---------------------------------------------------------------
+    h = np.min(result_backupfall["y"][IDX_HEIGHT,:])
+    f_a1 = np.max(result_backupfall["f_anchor1"])/1000
+    f_a2 = np.max(result_backupfall["f_anchor2"])/1000
+    f_leash = np.max(result_backupfall["f_leash"])/1000
+
+    rows.append({
+        "Situation": "Backup fall",
+        "Slackliner's height (m)": h,
+        "Distance from anchor": np.nan,
+        "Tension - left side (kN)": f_a1,
+        "Tension - right side (kN)": f_a2,
+        "Tension - leash (kN)": f_leash,
+    })
+
+    # ---------------------------------------------------------------
+    # Backup fall - settled (final state)
+    # ---------------------------------------------------------------
+    s = state_at(result_backupfall, -1)
+
+    # rows.append({
+    #     "Situation": "Backup fall - settled",
+    #     "Slackliner's height (m)": s["height"],
+    #     "Distance from anchor": s["distance"],
+    #     "Tension - left side (kN)": s["left"],
+    #     "Tension - right side (kN)": s["right"],
+    #     "Tension - leash (kN)": np.nan,
+    # })
+
+    df = pd.DataFrame(rows)
+
+    # nicer formatting
+    return df.round({
+        "Slackliner's height (m)": 2,
+        "Distance from anchor": 2,
+        "Tension - left side (kN)": 2,
+        "Tension - right side (kN)": 2,
+        "Tension - leash (kN)": 2,
+    })
+
+
+
 def main():
 
     
-    result = simulate()
+    result_leashfall, result_backupfall = simulate()
+    
+    # Example
+    table = summarize_results(result_leashfall, result_backupfall)
+    table.to_csv("results_more_tense_dont_detect.csv", index=False)
+    with pd.option_context(
+        "display.max_columns", None,
+        "display.width", None,
+    ):
+        print(table)
+
 
     # animate_rope(result)
-    # player = RopePlayer(result)
-    # plt.show()
+    player1 = RopePlayer(result_leashfall)
+
+    if (result_backupfall is not None):
+        player2 = RopePlayer(result_backupfall)
+
+    plt.show()
 
 if __name__ == "__main__":
     main()

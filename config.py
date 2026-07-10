@@ -50,8 +50,8 @@ y2k   = webbing(stretch_pct = 1.0,  tension_kN = 5, weight_g_m = 33)
 
 # Webbings and line
 webbing_width = 0.0254 # [m]
-L = 200             # Line length [m]
-pull_webbing = -1.5
+L = 1000             # Line length [m]
+pull_webbing = 9.0
 
 # Segmented setup
 # segs = [ segment(joker, solid, L, L_backup, False) ]
@@ -62,11 +62,32 @@ pull_webbing = -1.5
 #         segment(joker, joker, L/4, L/4 + 1.5, False),  
 #        ]
 
-segs = [ 
+# segs = [ 
+#         segment(joker, solid, 55, 58, True),
+#         segment(joker, solid, 55, 58, False),
+#        ]
+
+segs = [
+        segment(y2k, y2k, 50, 53, True),
         segment(y2k, y2k, 50, 53, False),
         segment(y2k, y2k, 50, 53, False),
         segment(y2k, y2k, 50, 53, False),
-        segment(joker, solid, 50, 52, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
+        segment(y2k, y2k, 50, 53, False),
        ]
 
 # Experiment
@@ -80,7 +101,7 @@ l_leg = 1.1        # Length of legs [m] (until harness connection point)
 kl_leash = 200*1E3 # Spring constant times length - Leash
 
 # Discretization
-N = 31             # Discretization
+N = 101             # Discretization
 x_slacker = 100  # x value of slackliner
 detect_collision = True
 

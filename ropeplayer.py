@@ -4,7 +4,6 @@ from matplotlib.collections import LineCollection
 import numpy as np
 
 from config import *
-from simulation import dofhandler
 from polyline import project_along_y, interpolate
 
 
@@ -82,7 +81,8 @@ class RopePlayer:
         self.line.set_color(colors)
 
         pos = Z[:2*N].reshape(N, 2)
-        p_slacker = Z[dofhandler.start_slackliner:dofhandler.start_slackliner+2]
+        start_slackliner = 2*N
+        p_slacker = Z[start_slackliner:start_slackliner+2]
         proj, _, _, _, _ = project_along_y(p_slacker, pos)
         xs = [proj[0], p_slacker[0]]
         ys = [proj[1], p_slacker[1]]

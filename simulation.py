@@ -10,6 +10,9 @@ import sys
 
 from config import * # Change when we switch to segmented setups
 from polyline import project_along_y, interpolate
+from slackline_physics import SlacklineRHS
+from ropeplayer import RopePlayer
+import matplotlib.pyplot as plt
 
 from itertools import accumulate
 
@@ -59,15 +62,19 @@ def discretize_segments(segments, x):
 
     l_backup = np.array([l[j] * segments[i].L_backup/segments[i].L_main for (j,i) in enumerate(idx)])
 
-    # Mass of each interval
-    interval_mass = rho * l + rho_backup * l_backup
-
     # Interior node masses (half from each neighbouring interval)
-    m = 0.5 * (interval_mass[:-1] + interval_mass[1:])
+    m = get_mass_from_l(l, l_backup, rho, rho_backup)
 
     break_mainline = np.array([segments[i].break_mainline for i in idx], dtype=bool)
 
     return kl, m, l, kl_backup, l_backup, rho, rho_backup, break_mainline, idx
+
+
+def get_mass_from_l(l, l_backup, rho, rho_backup):
+    interval_mass = rho * l + rho_backup * l_backup
+    m = 0.5 * (interval_mass[:-1] + interval_mass[1:])
+    m += 0.5 * (interval_mass[0] + interval_mass[-1]) / len(m)
+    return m
 
 g = np.array([0, -9.82])
 
@@ -112,8 +119,12 @@ class DoFHandler:
         else:
             v = np.array([0, -l_leash])
 
+
         y_min = np.min(pos[1::2])
-        p_slacker = np.array([x_slacker, y_min]) # TODO maybe a hack?
+        zslackliner = np.array([x_slacker, y_min]) # Initial guess
+        proj, dist, _, _, _ = project_along_y(zslackliner, pos.reshape(N, 2) # Project to line
+)
+        p_slacker = proj # set position on line to projection
 
         if (pos.size <= self.offset):
             pos = np.concatenate((pos, p_slacker + v))
@@ -125,25 +136,20 @@ class DoFHandler:
 dofhandler = DoFHandler()
 
 # Adjust tension by adding/decreasing webbing
-# Add by 2m      : w = 2
-# Decrease by 2m : w = -2
+# Add by 2m      : w = -2
+# Decrease by 2m : w = 2
 def add_tension(w, seg_id):
     if (seg_id >= len(segs)):
         print("wrong section for tensioning")
         sys.exit()
-    global l
+    global l, m
     L_main = np.sum(l[seg_ids == seg_id])
-    alpha = w/L_main
+    alpha = -w/L_main
     l[seg_ids == seg_id] = l[seg_ids == seg_id]*(1+alpha)
 
-    interval_mass = rho * l + rho_backup * l_backup
-
-    sum_main = np.sum(interval_mass[seg_ids == seg_id])
-    mass_removed = w*(segs[seg_id].rho_main + segs[seg_id].rho_backup)
-    alpha = mass_removed/sum_main
-    interval_mass[seg_ids == seg_id] = interval_mass[seg_ids == seg_id]*(1+alpha)
-
-    m = 0.5 * (interval_mass[:-1] + interval_mass[1:])
+    # Update mass of line, as some has been removed
+    m = get_mass_from_l(l, l_backup, rho, rho_backup)
+    print(f"m: {np.sum(m)}")
 
 def compute_tension_mainline(pos):
     t = np.zeros(2*N-2)
@@ -154,6 +160,24 @@ def compute_tension_mainline(pos):
         t[i] = tension(zi, zip1, kl[i], l[i])
 
     return np.max(t)
+
+def get_force_from_pos(pos):
+    # vectors to previous and next nodes
+    d_prev = pos[:-1,:] - pos[1:,:] 
+    dist_prev = np.linalg.norm(d_prev, axis=1)
+
+    main = kl * np.maximum(dist_prev - l, 0.0) / l
+    backup = kl_backup * np.maximum(dist_prev - l_backup, 0.0) / l_backup
+    
+    kl_beta_prev = np.where(
+        break_mainline,
+        backup,
+        main + backup,
+    )
+
+    F_mag_prev = kl_beta_prev[:] 
+
+    return F_mag_prev, dist_prev
 
 def post_process(result, skip = 1):
 
@@ -184,20 +208,7 @@ def post_process(result, skip = 1):
         pos = Z[:2*N].reshape(N, 2)
         vel = Z[dofhandler.offset:dofhandler.offset+2*N].reshape(N, 2)
 
-        # vectors to previous and next nodes
-        d_prev = pos[:-1,:] - pos[1:,:] 
-        dist_prev = np.linalg.norm(d_prev, axis=1)
-
-        main = kl * np.maximum(dist_prev - l, 0.0) / l
-        backup = kl_backup * np.maximum(dist_prev - l_backup, 0.0) / l_backup
-        
-        kl_beta_prev = np.where(
-            break_mainline,
-            backup,
-            main + backup,
-        )
-
-        F_mag_prev = kl_beta_prev[:] 
+        F_mag_prev, dist_prev = get_force_from_pos(pos)
 
         f_webbing[i] = np.max(F_mag_prev)
         f_anchor1[i] = F_mag_prev[0]
@@ -456,7 +467,7 @@ def net_force_mainline(zim1, zi, zip1, kl, l, mm, kl_backup = None, l_backup = N
     return F
 
 
-def static_rhs(Z):
+def static_rhs(Z, with_slackliner, after_break):
 
     out = np.zeros_like(Z)
 
@@ -475,22 +486,27 @@ def static_rhs(Z):
     dist_prev = np.linalg.norm(d_prev, axis=1)
     dist_next = np.linalg.norm(d_next, axis=1)
 
+    backup_prev = kl_backup[:-1]*np.maximum(dist_prev-l_backup[:-1],0)/l_backup[:-1]
+
     beta_prev = (
-        kl[:-1]*np.maximum(dist_prev-l[:-1],0)/l[:-1]
-        + kl_backup[:-1]*np.maximum(dist_prev-l_backup[:-1],0)/l_backup[:-1]
+        kl[:-1]*np.maximum(dist_prev-l[:-1],0)/l[:-1] + backup_prev
     )
 
+    backup_next = kl_backup[1:]*np.maximum(dist_next-l_backup[1:],0)/l_backup[1:]
     beta_next = (
-        kl[1:]*np.maximum(dist_next-l[1:],0)/l[1:]
-        + kl_backup[1:]*np.maximum(dist_next-l_backup[1:],0)/l_backup[1:]
+        kl[1:]*np.maximum(dist_next-l[1:],0)/l[1:] + backup_prev
     )
+
+    if (after_break):
+        beta_prev[break_mainline[:-1]] = backup_prev[break_mainline[:-1]]
+        beta_next[break_mainline[1:]] = backup_next[break_mainline[1:]]
 
     F_prev = beta_prev[:,None]*d_prev/dist_prev[:,None]
     F_next = beta_next[:,None]*d_next/dist_next[:,None]
 
     masses = m.copy()
 
-    if dofhandler.with_slackliner:
+    if with_slackliner:
         p_slacker = np.array([x_slacker, np.min(pos[:,1])]) # TODO maybe a hack?
         _, dist, i_prev, i_next, alpha = project_along_y(p_slacker, pos)
 
@@ -517,13 +533,14 @@ def get_initial_pos_from_tension(T_kN = 2):
 
     return positions
 
-def get_static_position(pos = None):
+def get_static_position(pos = None, with_slackliner = True, after_break = False):
     if (pos is None):
-        w_line = np.sum(m)
-        # pos = get_initial_pos_from_tension(T_kN = w_line*9.82/1000)
-        pos = get_initial_pos_from_tension(T_kN = 0.05)
+        w_line = np.sum(m) + m_slackliner
+        pos = get_initial_pos_from_tension(T_kN = w_line*9.82/1000)
+        # pos = get_initial_pos_from_tension(T_kN = 0.05)
 
-    sol, info, ier, mesg = fsolve(static_rhs, pos, full_output=True)
+    sol, info, ier, mesg = fsolve(static_rhs, pos, full_output=True, 
+                                  args = (with_slackliner, after_break))
 
     if (ier != 1):
         print("Static solver could not converge!")
@@ -544,10 +561,31 @@ def integrate_with_collisions(y0, t0, tf, **solve_kwargs):
     y_all = []
     collision_times = []
 
+    rhs = SlacklineRHS(
+        N,
+        dofhandler,
+        kl=kl,
+        l=l,
+        kl_backup=kl_backup,
+        l_backup=l_backup,
+        break_mainline=break_mainline,
+        m=m,
+        g=g,
+        rho_air=rho_air,
+        C_D=C_D,
+        webbing_width=webbing_width,
+        update_every=update_every,
+        pbar=pbar,
+        project_along_y=project_along_y,
+        kl_leash=kl_leash,
+        l_leash=l_leash,
+        m_slackliner=m_slackliner,
+    )
+
     while t_current < tf:
 
         sol = solve_ivp(
-            ODE_rhs_vectorized,
+            rhs,
             (t_current, tf),
             y_current,
             events=leash_event,
@@ -571,7 +609,7 @@ def integrate_with_collisions(y0, t0, tf, **solve_kwargs):
         y_current = apply_collision(sol.y_events[0][0])
         collision_times.append(t_current)
 
-        pbar.write(f"Leash started to see tension at t = {t_current:.2f}")
+        # pbar.write(f"Leash started to see tension at t = {t_current:.2f}")
 
     return {
         "t": np.array(t_all),
@@ -579,24 +617,86 @@ def integrate_with_collisions(y0, t0, tf, **solve_kwargs):
         "collision_times": collision_times,
     }
 
-def simulate(pos = None):
+def simulate():
     add_tension(pull_webbing, len(segs)-1)
 
-    if (pos is None):
-        pos = get_static_position()
+
+    pos = get_static_position(with_slackliner = True)
 
     pos = dofhandler.get_position_line_and_slackliner(pos, walking = True)
     vel = np.zeros_like(pos)
     Z = np.concatenate((pos, vel))
 
-    result = integrate_with_collisions(
+    # Simulate backup fall
+    result_backupfall = None
+    if (np.any(break_mainline)):
+        print("Simulating backup fall:")
+        result_backupfall = integrate_with_collisions(
+            Z,
+            t0,
+            t1,
+            rtol=1e-12,
+            atol=1e-12,
+        )
+        result_backupfall = post_process(result_backupfall, skip = 1) # Add postprocessing to result_backupfalls
+
+    # Z = result_backupfall["y"][:, -1]
+    # result_tmp = integrate_with_collisions(
+    #     Z,
+    #     t1,
+    #     300,
+    #     rtol=1e-2,
+    #     atol=1e-2,
+    # )
+    # pos = result_tmp["y"][:2*N,-1]
+    # result_tmp = post_process(result_tmp, skip = 1)
+
+    # global x_slacker
+
+    # x_tmp = x_slacker
+    # x_slacker = result_tmp["y"][2*N,-1]
+
+    # pos = get_static_position(pos, with_slackliner = True, after_break = True)
+
+    # x_slacker = x_tmp
+
+    # pos_static = pos[:2*N].reshape(N, 2)
+    # F_mag_prev, _ = get_force_from_pos(pos_static)
+    
+    # f_webbing = np.max(F_mag_prev)
+    # f_anchor1 = F_mag_prev[0]
+    # f_anchor2 = F_mag_prev[-1]
+    # print(
+    #         f"\n\n After break Tension:\n"
+    #         f"  Webbing:  {f_webbing:.2f}\n"
+    #         f"  Anchor 1: {f_anchor1:.2f}\n"
+    #         f"  Anchor 2: {f_anchor2:.2f}\n"
+    #      )
+
+    # Simulate leash fall
+    print("Simulating leash fall:")
+    pos = get_static_position(with_slackliner = True)
+    break_mainline[:] = False
+
+    result_leashfall = integrate_with_collisions(
         Z,
         t0,
         t1,
-        rtol=1e-12,
-        atol=1e-12,
+        rtol=1e-7,
+        atol=1e-7,
     )
+    result_leashfall = post_process(result_leashfall, skip = 1) # Add postprocessing to result_backupfalls
 
-    result = post_process(result, skip = 1) # Add postprocessing to results
-    return result
+    pos = get_static_position(with_slackliner = False)
+    pos_static = pos[:2*N].reshape(N, 2)
+    F_mag_prev, _ = get_force_from_pos(pos_static)
+    
+    f_standing = np.max(F_mag_prev)
+    result_leashfall["f_standing"] = f_standing
+    result_backupfall["f_standing"] = f_standing
+
+    result_leashfall["w_line"] = np.sum(m)
+    result_backupfall["w_line"] = np.sum(m)
+
+    return result_leashfall, result_backupfall
 
