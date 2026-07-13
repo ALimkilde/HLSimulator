@@ -7,11 +7,9 @@ import time
 import sys
 from tqdm import tqdm
 
-from simulation import simulate, add_tension, get_static_position, dofhandler, compute_tension_mainline
+from slackline_physics import SlacklineSpringModel, Webbing, Segment, Slackliner
 from ropeplayer import RopePlayer
  
-from config import * # Change when we switch to segmented setups
-
 def plot_rope(Z, ax = None, label = None):
     if (ax is None):
         fig, ax = plt.subplots(figsize=(16, 9))
@@ -95,17 +93,11 @@ def animate_rope(result, skip=500, keep_initial_in_background = True):
 
     plt.show()
 
-def plot_static_position(pos):
+def plot_static_position(model, pos):
     plot_rope(pos, label = 'static pos')
-    plt.title(f"Tension = {compute_tension_mainline(pos)/1000} kN")
-    print(f"Tension = {compute_tension_mainline(pos)/1000} kN")
+    plt.title(f"Tension = {model.compute_tension_mainline(pos)/1000} kN")
+    print(f"Tension = {model.compute_tension_mainline(pos)/1000} kN")
 
-# ---------------------------------------------------------------------
-# Adjust these indices to match your state vector
-# ---------------------------------------------------------------------
-IDX_HEIGHT = 2*N+1          # slackliner's vertical position
-IDX_DISTANCE = 2*N        # horizontal distance from left anchor (example)
-# ---------------------------------------------------------------------
 
 def state_at(result, idx, start = False):
     """Extract quantities at one time index."""
@@ -123,7 +115,7 @@ def state_at(result, idx, start = False):
 
 
 
-def summarize_results(result_leashfall, result_backupfall):
+def summarize_results(model, result_leashfall, result_backupfall):
     rows = []
 
     # ---------------------------------------------------------------
@@ -155,7 +147,7 @@ def summarize_results(result_leashfall, result_backupfall):
     # ---------------------------------------------------------------
     # Leash fall (maximum leash force)
     # ---------------------------------------------------------------
-    h = np.min(result_leashfall["y"][IDX_HEIGHT,:])
+    h = np.min(result_leashfall["y"][model.start_slackliner+1,:])
     f_a1 = np.max(result_leashfall["f_anchor1"])/1000
     f_a2 = np.max(result_leashfall["f_anchor2"])/1000
     f_leash = np.max(result_leashfall["f_leash"])/1000
@@ -172,7 +164,7 @@ def summarize_results(result_leashfall, result_backupfall):
     # ---------------------------------------------------------------
     # Backup fall - impact (maximum leash force)
     # ---------------------------------------------------------------
-    h = np.min(result_backupfall["y"][IDX_HEIGHT,:])
+    h = np.min(result_backupfall["y"][model.start_slackliner+1,:])
     f_a1 = np.max(result_backupfall["f_anchor1"])/1000
     f_a2 = np.max(result_backupfall["f_anchor2"])/1000
     f_leash = np.max(result_backupfall["f_leash"])/1000
@@ -211,15 +203,44 @@ def summarize_results(result_leashfall, result_backupfall):
         "Tension - leash (kN)": 2,
     })
 
-
+# TODO move to data file?
+# Webbings
+pinktube = Webbing(stretch_pct = 15.4,  tension_kN = 5, weight_g_m = 54) 
+joker = Webbing(stretch_pct = 3.6,  tension_kN = 5, weight_g_m = 54) 
+solid = Webbing(stretch_pct = 2.5,  tension_kN = 5, weight_g_m = 50) 
+y2k   = Webbing(stretch_pct = 1.0,  tension_kN = 5, weight_g_m = 33) 
 
 def main():
 
+
+    segs = [ 
+            Segment(joker, solid, 30, 32, True),
+            Segment(joker, solid, 30, 32, False),
+            Segment(joker, solid, 40, 43, False),
+           ]
+
+    # Slackliner
+    slackliner = Slackliner(
+            m = 89, 
+            l_leg = 1.1, 
+            l_leash = 1.3,
+            x_coor = 50,
+            )
+
+    model = SlacklineSpringModel(
+            L = 100,
+            N = 101,
+            slackliner = slackliner,
+            segs = segs,
+            T = 50,
+            pull_webbing = 1
+            )
     
-    result_leashfall, result_backupfall = simulate()
+    # TODO split into multiple calls
+    result_leashfall, result_backupfall = model.simulate()
     
     # Example
-    # table = summarize_results(result_leashfall, result_backupfall)
+    # table = summarize_results(model, result_leashfall, result_backupfall)
     # table.to_csv("results_more_tense_dont_detect.csv", index=False)
     # with pd.option_context(
     #     "display.max_columns", None,
@@ -227,14 +248,13 @@ def main():
     # ):
     #     print(table)
 
-
     plt.plot(result_leashfall["t"], result_leashfall["f_leash"])
     plt.xlabel("Time [s]")
     plt.ylabel("Force [N]")
     plt.grid(True)
 
     # animate_rope(result)
-    player1 = RopePlayer(result_leashfall)
+    player1 = RopePlayer(result_leashfall, model)
 
     # if (result_backupfall is not None):
     #     player2 = RopePlayer(result_backupfall)

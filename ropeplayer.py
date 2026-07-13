@@ -3,12 +3,14 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.collections import LineCollection
 import numpy as np
 
-from config import *
-from polyline import project_along_y, interpolate
-
+from slackline_physics import project_along_y, interpolate
 
 class RopePlayer:
-    def __init__(self, result, fps=60):
+    def __init__(self, result, model, fps=60):
+
+        self.model = model
+        N = model.N
+                               
         self.result = result
 
         display_times = np.arange(result["t"][0],
@@ -28,7 +30,7 @@ class RopePlayer:
 
         self.fig, self.ax = plt.subplots(figsize=(16, 9))
 
-        self.ax.set_xlim(-0.05 * L, 1.05 * L)
+        self.ax.set_xlim(-0.05 * self.model.L, 1.05 * self.model.L)
         self.ax.set_ylim(np.min(result["y"][1:2*N+2:2]), np.max(result["y"][1:2*N+2:2]))
         self.ax.set_aspect("equal")
         self.ax.grid(True)
@@ -62,6 +64,7 @@ class RopePlayer:
         self.draw_frame(0)
 
     def draw_frame(self, display_frame):
+        N = self.model.N
         i = self.display_idx[display_frame]
     
         Z = self.result["y"][:, i]
