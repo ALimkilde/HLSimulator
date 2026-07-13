@@ -2,7 +2,6 @@ import numpy as np
 import math
 from scipy.integrate import solve_ivp
 from scipy.optimize import fsolve
-from numba import njit
 from dataclasses import dataclass
 from functools import cached_property
 from tqdm import tqdm
@@ -629,49 +628,16 @@ def simulate():
 
     # Simulate backup fall
     result_backupfall = None
-    if (np.any(break_mainline)):
-        print("Simulating backup fall:")
-        result_backupfall = integrate_with_collisions(
-            Z,
-            t0,
-            t1,
-            rtol=1e-12,
-            atol=1e-12,
-        )
-        result_backupfall = post_process(result_backupfall, skip = 1) # Add postprocessing to result_backupfalls
-
-    # Z = result_backupfall["y"][:, -1]
-    # result_tmp = integrate_with_collisions(
-    #     Z,
-    #     t1,
-    #     300,
-    #     rtol=1e-2,
-    #     atol=1e-2,
-    # )
-    # pos = result_tmp["y"][:2*N,-1]
-    # result_tmp = post_process(result_tmp, skip = 1)
-
-    # global x_slacker
-
-    # x_tmp = x_slacker
-    # x_slacker = result_tmp["y"][2*N,-1]
-
-    # pos = get_static_position(pos, with_slackliner = True, after_break = True)
-
-    # x_slacker = x_tmp
-
-    # pos_static = pos[:2*N].reshape(N, 2)
-    # F_mag_prev, _ = get_force_from_pos(pos_static)
-    
-    # f_webbing = np.max(F_mag_prev)
-    # f_anchor1 = F_mag_prev[0]
-    # f_anchor2 = F_mag_prev[-1]
-    # print(
-    #         f"\n\n After break Tension:\n"
-    #         f"  Webbing:  {f_webbing:.2f}\n"
-    #         f"  Anchor 1: {f_anchor1:.2f}\n"
-    #         f"  Anchor 2: {f_anchor2:.2f}\n"
-    #      )
+    # if (np.any(break_mainline)):
+    #     print("Simulating backup fall:")
+    #     result_backupfall = integrate_with_collisions(
+    #         Z,
+    #         t0,
+    #         t1,
+    #         rtol=1e-10,
+    #         atol=1e-10,
+    #     )
+    #     result_backupfall = post_process(result_backupfall, skip = 1) # Add postprocessing to result_backupfalls
 
     # Simulate leash fall
     print("Simulating leash fall:")
@@ -682,8 +648,8 @@ def simulate():
         Z,
         t0,
         t1,
-        rtol=1e-7,
-        atol=1e-7,
+        rtol=1e-5,
+        atol=1e-5,
     )
     result_leashfall = post_process(result_leashfall, skip = 1) # Add postprocessing to result_backupfalls
 
@@ -693,10 +659,10 @@ def simulate():
     
     f_standing = np.max(F_mag_prev)
     result_leashfall["f_standing"] = f_standing
-    result_backupfall["f_standing"] = f_standing
+    # result_backupfall["f_standing"] = f_standing
 
     result_leashfall["w_line"] = np.sum(m)
-    result_backupfall["w_line"] = np.sum(m)
+    # result_backupfall["w_line"] = np.sum(m)
 
     return result_leashfall, result_backupfall
 

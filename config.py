@@ -50,8 +50,8 @@ y2k   = webbing(stretch_pct = 1.0,  tension_kN = 5, weight_g_m = 33)
 
 # Webbings and line
 webbing_width = 0.0254 # [m]
-L = 1000             # Line length [m]
-pull_webbing = 9.0
+L = 100             # Line length [m]
+pull_webbing = 1.0
 
 # Segmented setup
 # segs = [ segment(joker, solid, L, L_backup, False) ]
@@ -62,33 +62,34 @@ pull_webbing = 9.0
 #         segment(joker, joker, L/4, L/4 + 1.5, False),  
 #        ]
 
-# segs = [ 
-#         segment(joker, solid, 55, 58, True),
-#         segment(joker, solid, 55, 58, False),
-#        ]
-
-segs = [
-        segment(y2k, y2k, 50, 53, True),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
-        segment(y2k, y2k, 50, 53, False),
+segs = [ 
+        segment(joker, solid, 30, 32, True),
+        segment(joker, solid, 30, 32, False),
+        segment(joker, solid, 40, 43, False),
        ]
+
+# segs = [
+#         segment(y2k, y2k, 50, 53, True),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#         segment(y2k, y2k, 50, 53, False),
+#        ]
 
 # Experiment
 break_mainline = False
@@ -102,10 +103,10 @@ kl_leash = 200*1E3 # Spring constant times length - Leash
 
 # Discretization
 N = 101             # Discretization
-x_slacker = 100  # x value of slackliner
+x_slacker = L/2  # x value of slackliner
 detect_collision = True
 
 
 # ODE setting
 t0 = 0
-t1 = 5
+t1 = 20

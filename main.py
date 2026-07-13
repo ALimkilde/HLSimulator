@@ -122,6 +122,7 @@ def state_at(result, idx, start = False):
     }
 
 
+
 def summarize_results(result_leashfall, result_backupfall):
     rows = []
 
@@ -218,20 +219,25 @@ def main():
     result_leashfall, result_backupfall = simulate()
     
     # Example
-    table = summarize_results(result_leashfall, result_backupfall)
-    table.to_csv("results_more_tense_dont_detect.csv", index=False)
-    with pd.option_context(
-        "display.max_columns", None,
-        "display.width", None,
-    ):
-        print(table)
+    # table = summarize_results(result_leashfall, result_backupfall)
+    # table.to_csv("results_more_tense_dont_detect.csv", index=False)
+    # with pd.option_context(
+    #     "display.max_columns", None,
+    #     "display.width", None,
+    # ):
+    #     print(table)
 
+
+    plt.plot(result_leashfall["t"], result_leashfall["f_leash"])
+    plt.xlabel("Time [s]")
+    plt.ylabel("Force [N]")
+    plt.grid(True)
 
     # animate_rope(result)
     player1 = RopePlayer(result_leashfall)
 
-    if (result_backupfall is not None):
-        player2 = RopePlayer(result_backupfall)
+    # if (result_backupfall is not None):
+    #     player2 = RopePlayer(result_backupfall)
 
     plt.show()
 
