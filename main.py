@@ -229,10 +229,10 @@ def main():
 
     model = SlacklineSpringModel(
             L = 100,
-            N = 101,
+            N = 31,
             slackliner = slackliner,
             segs = segs,
-            T = 50,
+            T = 5,
             pull_webbing = 1
             )
     
@@ -256,8 +256,8 @@ def main():
     # animate_rope(result)
     player1 = RopePlayer(result_leashfall, model)
 
-    # if (result_backupfall is not None):
-    #     player2 = RopePlayer(result_backupfall)
+    if (result_backupfall is not None):
+        player2 = RopePlayer(result_backupfall, model)
 
     plt.show()
 

@@ -105,7 +105,11 @@ class SlacklineSpringModel:
 
     def preallocate_workspace(self):
         self.d_edge = np.empty((self.n_edges, 2))
+        self.dist_edge_squared = np.empty((self.n_edges, 2))
         self.dist_edge = np.empty(self.n_edges)
+
+        self.d_vel = np.empty((self.n_edges, 2))
+        self.proj_vel = np.empty(self.n_edges)
 
         self.stretch = np.empty(self.n_edges)
         self.backup = np.empty(self.n_edges)
@@ -151,7 +155,7 @@ class SlacklineSpringModel:
         self.N_slackliner = 1
 
         # Setup parameters of numerical model
-        self.detect_collision = True
+        self.detect_collision = False
         #TODO : move rtol and atol here!
 
         # Physical parameters
@@ -160,6 +164,7 @@ class SlacklineSpringModel:
         self.C_D = 1.15                 # Drag coeff of rectangle
         self.webbing_width = 0.0254     # [m]
         self.kl_leash = 200*1E3         # Spring constant times length - Leash
+        self.damp_kelvin_voigt = 2E3      # Kelving Voigt Dampening Coefficient
 
         # Progress bar
         self.init_progress_bar()
@@ -236,6 +241,7 @@ class SlacklineSpringModel:
             self.offset + 2*self.N
         ].reshape(self.N, 2)
 
+        # The change of position is simply the velocities.
         out[:self.offset] = Z[self.offset:]
 
         ########################################################
@@ -244,11 +250,8 @@ class SlacklineSpringModel:
 
         np.subtract(pos[1:], pos[:-1], out=self.d_edge)
 
-        np.sqrt(
-            self.d_edge[:,0]**2 +
-            self.d_edge[:,1]**2,
-            out=self.dist_edge,
-        )
+        self.dist_edge_squared = self.d_edge[:,0]**2 + self.d_edge[:,1]**2
+        np.sqrt(self.dist_edge_squared, out=self.dist_edge)
 
         self.stretch[:] = self.dist_edge
         self.stretch -= self.l
@@ -276,8 +279,25 @@ class SlacklineSpringModel:
         self.F -= self.d_edge[:-1] * self.scale[:-1, None]
         self.F += self.d_edge[1:]  * self.scale[1:, None]
 
+        #######################################################
+        # Kelving Voigt Dampening
         ########################################################
-        # Slackliner
+
+        # if (np.max(vel)>1):
+            # print("break")
+        np.subtract(vel[1:], vel[:-1], out=self.d_vel)
+
+        # < delta vel, delta p > / ||delta p||^2
+        np.sum(self.d_vel * (self.d_edge / self.dist_edge_squared[:,None]), axis=1, out=self.proj_vel)
+
+        self.proj_vel = np.where(np.maximum(self.dist_edge > self.l, np.not(self.break_mainline)), self.break_mainline, self.proj_vel, 0.0) + np.where(self.dist_edge > self.l_backup, self.proj_vel, 0.0)
+
+        # Subtract force in both directions prev and next.
+        self.F -= self.damp_kelvin_voigt * self.proj_vel[:-1, None] * self.d_edge[:-1]
+        self.F += self.damp_kelvin_voigt * self.proj_vel[1:, None] * self.d_edge[1:]
+
+        ########################################################
+        # Leash pulling on line
         ########################################################
 
         if self.with_slackliner:
@@ -317,16 +337,21 @@ class SlacklineSpringModel:
             out=self.vel_norm,
         )
 
-        self.drag_coef[:] = (
-            self.drag_constant
-            * (self.dist_edge[:-1] + self.dist_edge[1:])
-        )
+        # Note that the drag is scaled with length of section to acount for 
+        # the area of this part of the webbing
+        self.drag_coef[:] = self.drag_constant * (self.dist_edge[:-1] + self.dist_edge[1:])
+        
+
+        self.F -= self.drag_coef[:,None] * vel[1:-1] * self.vel_norm[:,None]
+
+
+
+        ########################################################
+        # Combine all
+        ########################################################
 
         acc = (
             self.F
-            - self.drag_coef[:,None]
-            * vel[1:-1]
-            * self.vel_norm[:,None]
         ) / self.m[:,None]
 
         out[
@@ -470,7 +495,7 @@ class SlacklineSpringModel:
                 f"  Anchor 1: {np.max(f_anchor1):.2f}\n"
                 f"  Anchor 2: {np.max(f_anchor2):.2f}\n"
                 f"  Leash:    {np.max(f_leash):.2f}\n\n"
-                f"Gforce:    {np.max(G_leash):.2f}\n\n"
+                # f"Gforce:    {np.max(G_leash):.2f}\n\n"
                 f"Lowest Points:\n"
                 f"  Start Webbing: {lp_start_webbing:.2f}\n"
                 f"  Webbing:       {lp_webbing:.2f}\n"
@@ -694,16 +719,16 @@ class SlacklineSpringModel:
     
         # Simulate backup fall
         result_backupfall = None
-        # if (np.any(break_mainline)):
-        #     print("Simulating backup fall:")
-        #     result_backupfall = integrate_with_collisions(
-        #         Z,
-        #         t0,
-        #         t1,
-        #         rtol=1e-10,
-        #         atol=1e-10,
-        #     )
-        #     result_backupfall = post_process(result_backupfall, skip = 1) # Add postprocessing to result_backupfalls
+        if (np.any(self.break_mainline)):
+            print("Simulating backup fall:")
+            result_backupfall = self.integrate_with_collisions(
+                Z,
+                self.t0,
+                self.t1,
+                rtol=1e-10,
+                atol=1e-10,
+            )
+            result_backupfall = self.post_process(result_backupfall, skip = 1) # Add postprocessing to result_backupfalls
     
         # Simulate leash fall
         print("Simulating leash fall:")
@@ -714,8 +739,8 @@ class SlacklineSpringModel:
             Z,
             self.t0,
             self.t1,
-            rtol=1e-5, #TODO switch to module var
-            atol=1e-5,
+            rtol=1e-2, #TODO switch to module var
+            atol=1e-2,
         )
         result_leashfall = self.post_process(result_leashfall, skip = 1) # Add postprocessing to result_backupfalls
     
