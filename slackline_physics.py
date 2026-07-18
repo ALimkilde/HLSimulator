@@ -1,4 +1,5 @@
 import numpy as np
+
 import math
 from scipy.integrate import solve_ivp
 from scipy.optimize import fsolve
@@ -62,24 +63,100 @@ class Segment:
 
 class SlacklineSpringModel:
     @cached_property
-    def N(self):
-        return self.N_main
+    def n_edges_line(self):
+        return self.N_line - 1
 
     @cached_property
-    def with_slackliner(self):
-        return self.N_slackliner > 0
+    def n_edges_leash(self):
+        return self.N_leash - 1
+
+    @cached_property
+    def n_masses_line(self):
+        return self.N_line - 2
+
+    @cached_property
+    def n_masses_leash(self):
+        return self.N_leash
+
+    @cached_property
+    def n_edges(self):
+        return self.n_edges_line + self.n_edges_leash
+
+    @cached_property
+    def n_masses(self):
+        return self.n_masses_line + self.n_masses_leash
+
+    @cached_property
+    def n_segs(self):
+        return len(self.segs)
 
     @cached_property
     def start_main(self):
         return 0
 
     @cached_property
-    def start_slackliner(self):
-        return 2*self.N_main
+    def start_masses_leash(self):
+        return self.n_masses_line
+
+    @cached_property
+    def end_edges_leash(self):
+        return self.start_masses_leash + self.n_masses_leash
+
+    @cached_property
+    def start_edges_leash(self):
+        return self.n_edges_line
+
+    @cached_property
+    def end_edges_leash(self):
+        return self.start_edges_leash + self.n_edges_leash
+
+    @cached_property
+    def start_leash(self):
+        return self.N_line
+
+    @cached_property
+    def end_leash(self):
+        return self.start_leash + self.N_leash
 
     @cached_property 
     def offset(self):
-        return 2*self.N_main + 2*self.N_slackliner
+        return self.N_line + self.N_leash - 1
+
+    @cached_property
+    def I_line_masses(self):
+        return range(0,self.n_masses_line)
+
+    @cached_property
+    def I_line_edges(self):
+        return range(0,self.n_edges_line)
+
+    @cached_property
+    def I_leash_edges(self):
+        return range(self.start_edges_leash,self.end_edges_leash)
+
+    @cached_property
+    def I_leash_masses(self):
+        return range(self.n_masses_line,self.n_masses_line + self.n_masses_leash)
+
+    @cached_property
+    def I_line_prev(self):
+        return range(0,self.n_edges_line - 1)
+
+    @cached_property
+    def I_line_next(self):
+        return range(1,self.n_edges_line)
+
+    @cached_property
+    def I_leash_prev(self):
+        return range(self.start_edges_leash, self.end_edges_leash)
+
+    @cached_property
+    def I_leash_next(self):
+        return range(self.start_edges_leash + 1, self.end_edges_leash)
+
+    @cached_property
+    def i_mass_slackliner(self):
+        return self.n_masses - 1
 
     def init_progress_bar(self):
         # progress bar
@@ -103,6 +180,16 @@ class SlacklineSpringModel:
             0.5 * self.rho_air * self.C_D * (self.webbing_width / 2)
         )
 
+    def allocate_properties(self):
+        self.break_mainline = np.zeros(self.n_edges, dtype=bool)
+        self.m = np.empty(self.n_masses)
+        self.l = np.empty(self.n_edges)
+        self.l_backup = np.empty(self.n_edges)
+        self.kl = np.empty(self.n_edges)
+        self.kl_backup = np.zeros(self.n_edges)
+        self.rho = np.empty(self.n_edges)
+        self.rho_backup = np.empty(self.n_edges)
+
     def preallocate_workspace(self):
         self.d_edge = np.empty((self.n_edges, 2))
         self.dist_edge_squared = np.empty((self.n_edges, 2))
@@ -120,22 +207,11 @@ class SlacklineSpringModel:
         self.drag_coef = np.empty(self.n_masses)
         self.vel_norm = np.empty(self.n_masses)
 
-    @cached_property
-    def n_edges(self):
-        return self.N - 1
-
-    @cached_property
-    def n_masses(self):
-        return self.N - 2
-
-    @cached_property
-    def n_segs(self):
-        return len(self.segs)
-
     def __init__(
         self,
         L,              # Length of highline spot
         N,              # Number of discretization verticies
+        N_leash,        # Number of discretization verticies for leash
         slackliner,     # Stats of a slackliner (weight, leg length, leash_length)
         segs,           # Segmented webbing
         T,              # Length of simulation in [s]
@@ -150,9 +226,10 @@ class SlacklineSpringModel:
         # Start time 
         self.t0 = 0
 
+
         # Set degrees of freedoms
-        self.N_main = N
-        self.N_slackliner = 1
+        self.N_line = N
+        self.N_leash = N_leash
 
         # Setup parameters of numerical model
         self.detect_collision = False
@@ -164,6 +241,7 @@ class SlacklineSpringModel:
         self.C_D = 1.15                 # Drag coeff of rectangle
         self.webbing_width = 0.0254     # [m]
         self.kl_leash = 200*1E3         # Spring constant times length - Leash
+        self.rho_leash = 0.3            # Density of leash!
         self.damp_kelvin_voigt = 2E3      # Kelving Voigt Dampening Coefficient
 
         # Progress bar
@@ -171,6 +249,7 @@ class SlacklineSpringModel:
 
         # Create discretization (mesh)
         self.spacings = self.init_spacings()
+        self.allocate_properties()
         self.discretize_segments()
 
         # Add tension
@@ -182,7 +261,7 @@ class SlacklineSpringModel:
 
     # Meshing routine essentially
     def init_spacings(self):
-       return np.linspace(0,self.L,self.N)
+       return np.linspace(0,self.L,self.N_line)
 
     # Adjust tension by adding/decreasing webbing
     # Add by 2m      : w = -2
@@ -191,64 +270,85 @@ class SlacklineSpringModel:
         if (seg_id >= len(self.segs)):
             print("wrong section for tensioning")
             sys.exit()
-        L_main = np.sum(self.l[self.seg_ids == seg_id])
+        l_line = self.l[self.I_line_edges]
+
+        L_main = np.sum(l_line[self.seg_ids == seg_id])
         alpha = -w/L_main
-        self.l[self.seg_ids == seg_id] = self.l[self.seg_ids == seg_id]*(1+alpha)
+
+        l_line[self.seg_ids == seg_id] = l_line[self.seg_ids == seg_id]*(1+alpha)
+
+        self.l[self.I_line_edges] = l_line
     
         # Update mass of line, as some has been removed
-        self.m = self.get_mass_from_l()
+        self.m[self.I_line_masses] = self.get_mass_from_l_line(self.I_line_edges)
 
     def get_position_line_and_slackliner(self, pos, walking = False):
+        # TODO Retire N_leash and only store n_edges_leash
         if walking:
-            v = np.array([0, self.slackliner.l_leg])
+            v = np.linspace(0, self.slackliner.l_leg, self.N_leash)
         else:
-            v = np.array([0, -self.slackliner.l_leash])
+            v = np.linspace(0, -self.slackliner.l_leash, self.N_leash)
 
         y_min = np.min(pos[1::2])
         zslackliner = np.array([self.slackliner.x_coor, y_min]) # Initial guess
-        proj, dist, _, _, _ = project_along_y(zslackliner, pos.reshape(self.N, 2) # Project to line
-)
+        proj, dist, _, _, _ = project_along_y(zslackliner, pos.reshape(self.N_line, 2)) # Project to line
         p_slacker = proj # set position on line to projection
 
-        if (pos.size <= self.offset):
-            pos = np.concatenate((pos, p_slacker + v))
-        elif (pos.size >= self.offset):
-            pos[self.start_slackliner: self.start_slackliner+2]  = p_slacker + v
+        p_leash = np.zeros((self.n_edges_leash, 2))
+        p_leash[:,1] = v[1:] 
+        p_leash += p_slacker[None,:]
+
+        if (pos.size <= self.N_line*2):
+            pos = np.concatenate((pos, p_leash.ravel()))
+        elif (pos.size >= self.offset*2):
+            pos[2*self.start_leash: 2*self.end_leash]  = p_leash.ravel()
 
         return pos
 
-    def ode_rhs(self, t, Z):
-
-        ########################################################
-        # Progress bar
-        ########################################################
-
-        if t > self.last_t:
-            self.last_t = t
-
-        if self.last_t - self.last_update >= self.update_every:
-            self.pbar.update(self.last_t - self.last_update)
-            self.last_update = self.last_t
-
-        ########################################################
-
-        out = np.zeros_like(Z)
-
-        pos = Z[:2*self.N].reshape(self.N, 2)
-
-        vel = Z[
-            self.offset:
-            self.offset + 2*self.N
-        ].reshape(self.N, 2)
-
-        # The change of position is simply the velocities.
-        out[:self.offset] = Z[self.offset:]
-
-        ########################################################
-        # Spring forces
-        ########################################################
-
+    def set_d_edge(self, pos, proj):
+        # Calculate length of all line segments
         np.subtract(pos[1:], pos[:-1], out=self.d_edge)
+
+        # Correct first segment of leash
+        self.d_edge[self.start_edges_leash] = pos[self.start_leash]- proj
+
+
+    def set_d_vel(self, vel, i_prev, i_next, alpha):
+        np.subtract(vel[1:], vel[:-1], out=self.d_vel)
+
+        vel_ring = (1 - alpha) * vel[i_prev] + alpha * vel[i_next]
+
+        self.d_vel[self.start_edges_leash] = vel[self.start_edges_leash] - vel_ring
+
+    def add_drag_forces(self, vel):
+        np.sqrt(
+            vel[1:-1,0]**2 +
+            vel[1:-1,1]**2,
+            out=self.vel_norm,
+        )
+
+        # Note that the drag is scaled with length of section to acount for 
+        # the area of this part of the webbing
+        self.drag_coef[:] = self.drag_constant * (self.dist_edge[:-1] + self.dist_edge[1:])
+        
+
+        self.F -= self.drag_coef[:,None] * vel[1:-1] * self.vel_norm[:,None]
+
+    def add_kelvin_voigt_dampening(self):
+        # < delta vel, delta p > / ||delta p||^2
+        np.sum(self.d_vel * (self.d_edge / self.dist_edge_squared[:,None]), axis=1, out=self.proj_vel)
+
+        # TODO Figure out why the force is not opp sign of springs!
+        self.proj_vel = np.where(np.maximum(self.dist_edge > self.l, np.logical_not(self.break_mainline)), self.proj_vel, 0.0) + np.where(self.dist_edge > self.l_backup, self.proj_vel, 0.0)
+
+        # Update forces for line
+        self.F[self.I_line_prev]-= self.damp_kelvin_voigt * self.proj_vel[self.I_line_prev, None] * self.d_edge[self.I_line_prev]
+        self.F[self.I_line_next] += self.damp_kelvin_voigt * self.proj_vel[self.I_line_next, None] * self.d_edge[self.I_line_next]
+
+        self.F[self.I_leash_prev]-= self.damp_kelvin_voigt * self.proj_vel[self.I_leash_prev, None] * self.d_edge[self.I_leash_prev]
+        self.F[self.I_line_next] += self.damp_kelvin_voigt * self.proj_vel[self.I_line_next, None] * self.d_edge[self.I_line_next]
+
+    def set_gravity_and_spring_forces(self):
 
         self.dist_edge_squared = self.d_edge[:,0]**2 + self.d_edge[:,1]**2
         np.sqrt(self.dist_edge_squared, out=self.dist_edge)
@@ -274,77 +374,83 @@ class SlacklineSpringModel:
             out=self.scale,
         )
 
-        self.F[:] = self.gravity_force
+        self.F[:] = 0.0
 
-        self.F -= self.d_edge[:-1] * self.scale[:-1, None]
-        self.F += self.d_edge[1:]  * self.scale[1:, None]
+        # Forces on line and leash
+        self.F[self.I_line_prev, :] -= self.d_edge[self.I_line_prev, :] * self.scale[self.I_line_prev, None]
+        self.F[self.I_line_next, :] += self.d_edge[self.I_line_next, :] * self.scale[self.I_line_next, None]
+
+        self.F[self.I_leash_prev, :] -= self.d_edge[self.I_leash_prev, :] * self.scale[self.I_leash_prev, None]
+        self.F[self.I_leash_next, :] += self.d_edge[self.I_leash_next, :] * self.scale[self.I_leash_next, None]
+
+        F_leash = self.F[self.start_edges_leash].copy()
+
+        self.F[:] += self.gravity_force
+
+        return F_leash
+
+
+    def ode_rhs(self, t, Z):
+
+        ########################################################
+        # Progress bar
+        ########################################################
+
+        if t > self.last_t:
+            self.last_t = t
+
+        if self.last_t - self.last_update >= self.update_every:
+            self.pbar.update(self.last_t - self.last_update)
+            self.last_update = self.last_t
+
+        ########################################################
+
+        reshaped = Z.reshape(2*self.offset, 2)
+        out = np.zeros_like(reshaped)
+
+        pos = reshaped[:self.offset, :]
+        vel = reshaped[self.offset:, :]
+
+        # The change of position is simply the velocities.
+        out[:self.offset, :] = reshaped[self.offset:, :]
+
+        ########################################################
+        # Spring forces
+        ########################################################
+
+        # Get leash ring position
+        proj, _, i_prev, i_next, alpha = (
+                project_along_y(pos[self.start_leash, :], pos[self.I_line_edges])
+        )
+
+        # Set lenght of line segments
+        self.set_d_edge(pos, proj)
+
+        # TODO: work on name?
+        # It also computes and stores :
+        #    self.dist_edge_squared
+        #    self.dist_edge
+        #    Maybe more?
+        F_leash = self.set_gravity_and_spring_forces() # Calculates and put spring forces into self.F
+
+        self.F[i_prev] -= (1-alpha)*F_leash
+        self.F[i_next] -= alpha*F_leash
 
         #######################################################
         # Kelving Voigt Dampening
         ########################################################
 
-        # if (np.max(vel)>1):
-            # print("break")
-        np.subtract(vel[1:], vel[:-1], out=self.d_vel)
+        # Set delta velocities
+        # self.set_d_vel(vel, i_prev, i_next, alpha)
 
-        # < delta vel, delta p > / ||delta p||^2
-        np.sum(self.d_vel * (self.d_edge / self.dist_edge_squared[:,None]), axis=1, out=self.proj_vel)
-
-        self.proj_vel = np.where(np.maximum(self.dist_edge > self.l, np.not(self.break_mainline)), self.break_mainline, self.proj_vel, 0.0) + np.where(self.dist_edge > self.l_backup, self.proj_vel, 0.0)
-
-        # Subtract force in both directions prev and next.
-        self.F -= self.damp_kelvin_voigt * self.proj_vel[:-1, None] * self.d_edge[:-1]
-        self.F += self.damp_kelvin_voigt * self.proj_vel[1:, None] * self.d_edge[1:]
-
-        ########################################################
-        # Leash pulling on line
-        ########################################################
-
-        if self.with_slackliner:
-
-            z_slack = Z[
-                self.start_slackliner:
-                self.start_slackliner+2
-            ]
-
-            proj, dist, i_prev, i_next, alpha = (
-                project_along_y(z_slack, pos)
-            )
-
-            d = z_slack - proj
-
-            if dist > self.slackliner.l_leash:
-
-                beta = (dist-self.slackliner.l_leash)/self.slackliner.l_leash
-
-                F_leash = (
-                    self.kl_leash
-                    * beta
-                    * d
-                    / dist
-                )
-
-                self.F[i_prev-1] += (1-alpha)*F_leash
-                self.F[i_next-1] += alpha*F_leash
+        # Add dampening forces
+        # self.add_kelvin_voigt_dampening()
 
         ########################################################
         # Drag
         ########################################################
 
-        np.sqrt(
-            vel[1:-1,0]**2 +
-            vel[1:-1,1]**2,
-            out=self.vel_norm,
-        )
-
-        # Note that the drag is scaled with length of section to acount for 
-        # the area of this part of the webbing
-        self.drag_coef[:] = self.drag_constant * (self.dist_edge[:-1] + self.dist_edge[1:])
-        
-
-        self.F -= self.drag_coef[:,None] * vel[1:-1] * self.vel_norm[:,None]
-
-
+        # self.add_drag_forces(vel)
 
         ########################################################
         # Combine all
@@ -354,50 +460,14 @@ class SlacklineSpringModel:
             self.F
         ) / self.m[:,None]
 
-        out[
-            self.offset+2:
-            self.offset+2*(self.N-1)
-        ] = acc.ravel()
+        # TODO: How do I set the out easily?
+        #     - Set first and last part of line to zero
+        #     - Set leash x coordinates to zero
+        # TODO: Mis this really correct?
+        out[ self.offset+1: self.offset+self.n_masses_line, :] = acc[1:self.n_masses_line, :]
+        out[ self.offset+self.N_line:, :] = acc[self.n_masses_line+1:, :]
 
-        ########################################################
-        # Slackliner equation
-        ########################################################
-
-        if self.with_slackliner:
-
-            i = self.start_slackliner
-
-            vel_slack = Z[
-                i+self.offset:
-                i+self.offset+2
-            ]
-
-            vel_norm = np.sqrt(
-                vel_slack[0]**2 +
-                vel_slack[1]**2
-            )
-
-            d = proj - z_slack
-
-            if dist > self.slackliner.l_leash:
-
-                beta = (dist-self.slackliner.l_leash)/self.slackliner.l_leash
-
-                F_slack = (
-                    self.slackliner.m*self.g
-                    + self.kl_leash*beta*d/dist
-                )
-
-            else:
-
-                F_slack = self.slackliner.m*self.g
-
-            out[
-                i+self.offset:
-                i+self.offset+2
-            ] = F_slack/self.slackliner.m
-
-        return out
+        return out.ravel()
 
     # TODO rewrite to vectorize and assume reshaped pos
     def compute_tension_mainline(self, pos):
@@ -415,11 +485,11 @@ class SlacklineSpringModel:
         d_prev = pos[:-1,:] - pos[1:,:] 
         dist_prev = np.linalg.norm(d_prev, axis=1)
     
-        main = self.k * np.maximum(dist_prev - self.l, 0.0) 
-        backup = self.k * np.maximum(dist_prev - self.l_backup, 0.0)
+        main = self.k[self.I_line_edges] * np.maximum(dist_prev - self.l[self.I_line_edges], 0.0) 
+        backup = self.k_backup[self.I_line_edges] * np.maximum(dist_prev - self.l_backup[self.I_line_edges], 0.0)
         
         kl_beta_prev = np.where(
-            self.break_mainline,
+            self.break_mainline[self.I_line_edges] ,
             backup,
             main + backup,
         )
@@ -436,22 +506,23 @@ class SlacklineSpringModel:
         f_anchor2 = np.empty_like(result["t"])
         f_leash = np.empty_like(result["t"])
         backup_activated = np.empty_like(result["t"], dtype = bool)
-        backup_activated_segments = np.empty((self.n_edges,len(result["t"])), dtype = bool)
+        backup_activated_segments = np.empty((self.n_edges_line,len(result["t"])), dtype = bool)
         
         # Gforces in leash
         G_leash = np.zeros_like(result["t"])
+
+        N = self.N_line
     
         # lowest point
-        lp_start_webbing = np.min(result["y"][0:2*self.N,0])
+        lp_start_webbing = np.min(result["y"][0:2*N,0])
         lp_webbing = 0
         lp_slackliner = 0
     
-        N = self.N
 
         for i in tqdm(range(0, len(result["t"]), skip), desc = "Post processing:"):
     
             lp_webbing = min(np.min(result["y"][1:2*N:2,i]), lp_webbing)
-            lp_slackliner = min(result["y"][self.start_slackliner + 1,i], lp_slackliner)
+            lp_slackliner = min(result["y"][self.start_leash + 1,i], lp_slackliner)
     
             Z = result["y"][:,i]
     
@@ -463,26 +534,16 @@ class SlacklineSpringModel:
             f_webbing[i] = np.max(F_mag_prev)
             f_anchor1[i] = F_mag_prev[0]
             f_anchor2[i] = F_mag_prev[-1]
-            backup_activated_segments[:,i] = np.maximum(0.0, dist_prev - self.l_backup)
+            backup_activated_segments[:,i] = np.maximum(0.0, dist_prev - self.l_backup[self.I_line_edges])
             backup_activated[i] = np.any(backup_activated_segments[:,i])
     
-            if (self.with_slackliner):
-                jj = self.start_slackliner
-                zslackliner = Z[jj: jj+2]
+            jj = 2*(self.end_leash-2)
+            zslackliner = Z[jj:jj+2]
         
-                proj, dist, _, _, _ = project_along_y(zslackliner, pos)
+            proj, dist, _, _, _ = project_along_y(zslackliner, pos)
     
-                f_leash[i] = tension(proj, zslackliner, self.kl_leash, self.slackliner.l_leash)
-                if (i > 0):
-                    i_prev = i - 20
-                    dt = result["t"][i] - result["t"][i_prev]
-                    vel_slack = Z[self.offset + self.start_slackliner:self.offset + self.start_slackliner + 2]
-                    vel_slack_prev = result["y"][self.offset + self.start_slackliner:self.offset + self.start_slackliner + 2, i_prev]
-                    acc = np.linalg.norm(vel_slack - vel_slack_prev) / dt          # m/s²
-                    G_leash[i] = np.linalg.norm(acc) / 9.82
-                    # if (G_leash[i] > 10):
-                        # print("High G forces")
-    
+            # TODO update and modernize this routine
+            f_leash[i] = tension(proj, zslackliner, self.kl_leash, self.slackliner.l_leash)
     
         print(
                 f"\n\nWalking Forces:\n"
@@ -520,9 +581,10 @@ class SlacklineSpringModel:
         return result
     
     def leash_event(self, t, Z):
-        if (not self.with_slackliner or not self.detect_collision):
+        if (not self.detect_collision):
             return 1.0  # never trigger
     
+        # TODO Retire this code
         pos = Z[:2*self.N].reshape(self.N, 2)
     
         p_slacker = Z[self.start_slackliner:self.start_slackliner+2]
@@ -578,11 +640,14 @@ class SlacklineSpringModel:
     leash_event.direction = 1   # only detect slack -> taut
     
     
+    # TODO: Rewrite and modernize using 'get_gravity_and_spring_forces
     def static_rhs(self, Z, with_slackliner, after_break):
+        
+        N = self.N_line
     
         out = np.zeros_like(Z)
     
-        pos = Z.reshape(self.N,2)
+        pos = Z.reshape(N,2)
     
         # boundary conditions
         out[0] = pos[0,0]
@@ -591,42 +656,32 @@ class SlacklineSpringModel:
         out[-2] = pos[-1,0] - self.L
         out[-1] = pos[-1,1]
     
-        d_prev = pos[:-2] - pos[1:-1]
-        d_next = pos[2:]  - pos[1:-1]
+        d_edges = pos[1:]  - pos[:-1]
     
-        dist_prev = np.linalg.norm(d_prev, axis=1)
-        dist_next = np.linalg.norm(d_next, axis=1)
+        dist_edges = np.linalg.norm(d_edges, axis=1)
     
-        backup_prev = self.k_backup[:-1]*np.maximum(dist_prev-self.l_backup[:-1],0)
+        backup = self.k_backup[self.I_line_edges]*np.maximum(dist_edges-self.l_backup[self.I_line_edges],0)
     
-        beta_prev = (
-            self.k[:-1]*np.maximum(dist_prev-self.l[:-1],0) + backup_prev
-        )
-    
-        backup_next = self.k_backup[1:]*np.maximum(dist_next-self.l_backup[1:],0)
-        beta_next = (
-            self.k[1:]*np.maximum(dist_next-self.l[1:],0) + backup_prev
-        )
+        beta = self.k[self.I_line_edges]*np.maximum(dist_edges-self.l[self.I_line_edges],0) + backup
     
         if (after_break):
-            beta_prev[self.break_mainline[:-1]] = backup_prev[self.break_mainline[:-1]]
-            beta_next[self.break_mainline[1:]] = backup_next[self.break_mainline[1:]]
+            beta[self.break_mainline[self.I_line_edges]] = backup[self.break_mainline[self.I_line_edges]]
     
-        F_prev = beta_prev[:,None]*d_prev/dist_prev[:,None]
-        F_next = beta_next[:,None]*d_next/dist_next[:,None]
+        F = beta[:,None]*d_edges/dist_edges[:,None]
     
-        masses = self.m.copy()
+        masses = np.empty(self.n_masses_line)
+        masses[:] = self.m[:self.n_masses_line]
     
         if with_slackliner:
-            p_slacker = np.array([self.slackliner.x_coor, np.min(pos[:,1])]) # TODO maybe a hack?
+            p_slacker = np.array([self.slackliner.x_coor, np.min(pos[:,1])]) # Random y position
             _, dist, i_prev, i_next, alpha = project_along_y(p_slacker, pos)
     
             masses[i_prev-1] += (1-alpha)*self.slackliner.m
             masses[i_next-1] += alpha    *self.slackliner.m
     
-        F = masses[:,None]*self.g + F_prev + F_next
+        net_force = masses[:,None]*self.g - F[self.I_line_prev] + F[self.I_line_next]
     
-        out[2:-2] = F.reshape(-1)
+        out[2:-2] = net_force.ravel()
     
         return out
     
@@ -713,22 +768,23 @@ class SlacklineSpringModel:
     def simulate(self):
         pos = self.get_static_position(with_slackliner = True)
     
-        pos = self.get_position_line_and_slackliner(pos, walking = True)
+        # TODO : fix such that pos is always on non ravel format.
+        pos = self.get_position_line_and_slackliner(pos, walking = False)
         vel = np.zeros_like(pos)
         Z = np.concatenate((pos, vel))
     
         # Simulate backup fall
         result_backupfall = None
-        if (np.any(self.break_mainline)):
-            print("Simulating backup fall:")
-            result_backupfall = self.integrate_with_collisions(
-                Z,
-                self.t0,
-                self.t1,
-                rtol=1e-10,
-                atol=1e-10,
-            )
-            result_backupfall = self.post_process(result_backupfall, skip = 1) # Add postprocessing to result_backupfalls
+        # if (np.any(self.break_mainline)):
+        #     print("Simulating backup fall:")
+        #     result_backupfall = self.integrate_with_collisions(
+        #         Z,
+        #         self.t0,
+        #         self.t1,
+        #         rtol=1e-10,
+        #         atol=1e-10,
+        #     )
+        #     result_backupfall = self.post_process(result_backupfall, skip = 1) # Add postprocessing to result_backupfalls
     
         # Simulate leash fall
         print("Simulating leash fall:")
@@ -745,7 +801,7 @@ class SlacklineSpringModel:
         result_leashfall = self.post_process(result_leashfall, skip = 1) # Add postprocessing to result_backupfalls
     
         pos = self.get_static_position(with_slackliner = False)
-        pos_static = pos[:2*self.N].reshape(self.N, 2)
+        pos_static = pos[:2*self.N_line].reshape(self.N_line, 2)
         F_mag_prev, _ = self.get_force_from_pos(pos_static)
         
         f_standing = np.max(F_mag_prev)
@@ -779,40 +835,56 @@ class SlacklineSpringModel:
         m : (N-2,) ndarray
             Mass associated with interior nodes.
         """
-        x = self.spacings
+        x_line = self.spacings
 
-        self.l = np.diff(x)
-        mid = x[:-1] + 0.5 * self.l
-    
-        # Segment boundaries
+        # Fill data for Line
         bounds = np.array([0.0, *accumulate(s.L_main for s in self.segs)])
     
-        if (bounds[-1] < x[-1]):
-            print(f" Webbing not long enough. {bounds[-1]}m webbing doesn't bridge the {x[-1]}m gap")
+        if (bounds[-1] < x_line[-1]):
+            print(f" Webbing not long enough. {bounds[-1]}m webbing doesn't bridge the {x_line[-1]}m gap")
             sys.exit()
+
+        self.l[self.I_line_edges] = np.diff(x_line)
+        mid = x_line[:-1] + 0.5 * self.l[self.I_line_edges]
     
-        # Segment index for each interval
         self.seg_ids = np.searchsorted(bounds, mid, side="right") - 1
         self.seg_ids = np.clip(self.seg_ids, 0, self.n_segs - 1)
     
-        self.kl = np.array([self.segs[i].kl_main for i in self.seg_ids])
-        self.kl_backup = np.array([self.segs[i].kl_backup for i in self.seg_ids])
+        self.kl[self.I_line_edges] = np.array([self.segs[i].kl_main for i in self.seg_ids])
+        self.kl_backup[self.I_line_edges] = np.array([self.segs[i].kl_backup for i in self.seg_ids])
     
-        self.rho = np.array([self.segs[i].rho_main for i in self.seg_ids])
-        self.rho_backup = np.array([self.segs[i].rho_backup for i in self.seg_ids])
+        self.rho[self.I_line_edges] = np.array([self.segs[i].rho_main for i in self.seg_ids])
+        self.rho_backup[self.I_line_edges] = np.array([self.segs[i].rho_backup for i in self.seg_ids])
     
-        self.l_backup = np.array([self.l[j] * self.segs[i].L_backup/self.segs[i].L_main for (j,i) in enumerate(self.seg_ids)])
+        self.l_backup[self.I_line_edges] = np.array([self.l[j] * self.segs[i].L_backup/self.segs[i].L_main for (j,i) in enumerate(self.seg_ids)])
+
+        self.break_mainline[self.I_line_edges] = np.array([self.segs[i].break_mainline for i in self.seg_ids], dtype=bool)
+
+        self.m[self.I_line_masses] = self.get_mass_from_l_line(self.I_line_edges)
+
+        # Fill data for leash
+        x_leash = np.linspace(0,self.slackliner.l_leash,self.N_leash)
+
+        self.l[self.I_leash_edges] = np.diff(x_leash)
+        self.kl[self.I_leash_edges] = self.kl_leash
+        self.rho[self.I_leash_edges] = self.rho_leash
+        self.m[self.I_leash_masses] = self.get_mass_from_l_leash(self.I_leash_edges)
     
-        # Interior node masses (half from each neighbouring interval)
-        self.m = self.get_mass_from_l()
-    
-        self.break_mainline = np.array([self.segs[i].break_mainline for i in self.seg_ids], dtype=bool)
-    
-    
-    def get_mass_from_l(self):
-        interval_mass = self.rho * self.l + self.rho_backup * self.l_backup
+    # Interior node masses (half from each neighbouring interval)
+    def get_mass_from_l_line(self, I):
+        interval_mass = self.rho[I] * self.l[I] + self.rho_backup[I] * self.l_backup[I]
         m = 0.5 * (interval_mass[:-1] + interval_mass[1:])
         m += 0.5 * (interval_mass[0] + interval_mass[-1]) / len(m)
+        return m
+
+    # Interior node masses (half from each neighbouring interval)
+    def get_mass_from_l_leash(self, I):
+        interval_mass = self.rho[I] * self.l[I] + self.rho_backup[I] * self.l_backup[I]
+        m = np.empty(self.n_masses_leash)
+
+        m[1:-1] = 0.5 * (interval_mass[:-1] + interval_mass[1:])
+        m[0] = 0.5 * interval_mass[0] 
+        m[-1] = 0.5 * interval_mass[-1] + self.slackliner.m
         return m
 
 # TODO move this to a helpers file?

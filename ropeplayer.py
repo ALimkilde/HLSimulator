@@ -6,10 +6,10 @@ import numpy as np
 from slackline_physics import project_along_y, interpolate
 
 class RopePlayer:
-    def __init__(self, result, model, fps=60):
+    def __init__(self, result, model, fps=600):
 
         self.model = model
-        N = model.N
+        N = model.N_line
                                
         self.result = result
 
@@ -64,7 +64,7 @@ class RopePlayer:
         self.draw_frame(0)
 
     def draw_frame(self, display_frame):
-        N = self.model.N
+        N = self.model.N_line
         i = self.display_idx[display_frame]
     
         Z = self.result["y"][:, i]
@@ -103,8 +103,7 @@ class RopePlayer:
         f_a1 = self.result["f_anchor1"][i]
         f_a2 = self.result["f_anchor2"][i]
         f_leash = self.result["f_leash"][i]
-        G_l = self.result["G_leash"][i]
-        self.ax.set_title(f"t = {t:.1f}s, F_w = {f_w/1000:.1f}kN, F_l = {f_leash/1000:.1f}kN, G = {G_l:.1f}")
+        self.ax.set_title(f"t = {t:.1f}s, F_w = {f_w/1000:.1f}kN, F_l = {f_leash/1000:.1f}kN")
 
         self.fig.canvas.draw_idle()
 

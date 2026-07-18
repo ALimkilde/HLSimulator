@@ -230,9 +230,10 @@ def main():
     model = SlacklineSpringModel(
             L = 100,
             N = 31,
+            N_leash = 2,
             slackliner = slackliner,
             segs = segs,
-            T = 5,
+            T = 1.221,
             pull_webbing = 1
             )
     
