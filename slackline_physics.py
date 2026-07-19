@@ -106,21 +106,7 @@ class SlacklineSpringModel:
         )
 
     def preallocate_workspace(self):
-        self.d_edge = np.empty((self.n_edges, 2))
-        self.dist_edge_squared = np.empty((self.n_edges, 2))
-        self.dist_edge = np.empty(self.n_edges)
-
-        self.d_vel = np.empty((self.n_edges, 2))
-        self.proj_vel = np.empty(self.n_edges)
-
-        self.stretch = np.empty(self.n_edges)
-        self.backup = np.empty(self.n_edges)
-        self.beta = np.empty(self.n_edges)
-        self.scale = np.empty(self.n_edges)
-
         self.F = np.empty((self.n_masses, 2))
-        self.drag_coef = np.empty(self.n_masses)
-        self.vel_norm = np.empty(self.n_masses)
 
     @cached_property
     def n_edges(self):
@@ -255,11 +241,6 @@ class SlacklineSpringModel:
 
         # The change of position is simply the velocities.
         out[:self.offset] = Z[self.offset:]
-
-        np.subtract(pos[1:], pos[:-1], out=self.d_edge)
-
-        self.dist_edge_squared = self.d_edge[:,0]**2 + self.d_edge[:,1]**2
-        np.sqrt(self.dist_edge_squared, out=self.dist_edge)
 
 
         self.F[:] = self.gravity_force
