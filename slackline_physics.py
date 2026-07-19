@@ -45,8 +45,8 @@ class Segment:
 
     def __init__(
         self,
-        webbing_main: webbing,
-        webbing_backup: webbing,
+        webbing_main: Webbing,
+        webbing_backup: Webbing,
         L_main: float,
         L_backup: float,
         break_mainline: bool,
@@ -290,7 +290,7 @@ class SlacklineSpringModel:
         # < delta vel, delta p > / ||delta p||^2
         np.sum(self.d_vel * (self.d_edge / self.dist_edge_squared[:,None]), axis=1, out=self.proj_vel)
 
-        self.proj_vel = np.where(np.maximum(self.dist_edge > self.l, np.not(self.break_mainline)), self.break_mainline, self.proj_vel, 0.0) + np.where(self.dist_edge > self.l_backup, self.proj_vel, 0.0)
+        self.proj_vel = np.where(np.maximum(self.dist_edge > self.l, np.logical_not(self.break_mainline)), self.proj_vel, 0.0) + np.where(self.dist_edge > self.l_backup, self.proj_vel, 0.0)
 
         # Subtract force in both directions prev and next.
         self.F -= self.damp_kelvin_voigt * self.proj_vel[:-1, None] * self.d_edge[:-1]
