@@ -523,41 +523,18 @@ class SlacklineSpringModel:
     
     
     def static_rhs(self, Z, with_slackliner, after_break):
-    
-        out = np.zeros_like(Z)
-    
+
         pos = Z.reshape(self.N,2)
     
-        # boundary conditions
+        out = np.zeros_like(Z)
+
         out[0] = pos[0,0]
         out[1] = pos[0,1]
     
         out[-2] = pos[-1,0] - self.L
         out[-1] = pos[-1,1]
     
-        d_prev = pos[:-2] - pos[1:-1]
-        d_next = pos[2:]  - pos[1:-1]
-    
-        dist_prev = np.linalg.norm(d_prev, axis=1)
-        dist_next = np.linalg.norm(d_next, axis=1)
-    
-        backup_prev = self.k_backup[:-1]*np.maximum(dist_prev-self.l_backup[:-1],0)
-    
-        beta_prev = (
-            self.k[:-1]*np.maximum(dist_prev-self.l[:-1],0) + backup_prev
-        )
-    
-        backup_next = self.k_backup[1:]*np.maximum(dist_next-self.l_backup[1:],0)
-        beta_next = (
-            self.k[1:]*np.maximum(dist_next-self.l[1:],0) + backup_prev
-        )
-    
-        if (after_break):
-            beta_prev[self.break_mainline[:-1]] = backup_prev[self.break_mainline[:-1]]
-            beta_next[self.break_mainline[1:]] = backup_next[self.break_mainline[1:]]
-    
-        F_prev = beta_prev[:,None]*d_prev/dist_prev[:,None]
-        F_next = beta_next[:,None]*d_next/dist_next[:,None]
+        F = self.lineModel.get_net_forces(pos, after_break)
     
         masses = self.m.copy()
     
@@ -568,7 +545,7 @@ class SlacklineSpringModel:
             masses[i_prev-1] += (1-alpha)*self.slackliner.m
             masses[i_next-1] += alpha    *self.slackliner.m
     
-        F = masses[:,None]*self.g + F_prev + F_next
+        F += masses[:,None]*self.g
     
         out[2:-2] = F.reshape(-1)
     
