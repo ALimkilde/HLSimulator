@@ -11,6 +11,8 @@ import matplotlib.pyplot as plt
 
 from itertools import accumulate
 
+from rope_model import RopeModel
+
 @dataclass
 class Slackliner:
     m       : float # mass in [kg]
@@ -180,6 +182,16 @@ class SlacklineSpringModel:
         self.precompute_constants()
         self.preallocate_workspace()
 
+        self.lineModel = RopeModel(L, 
+                                   N, 
+                                   self.kl, 
+                                   self.kl_backup, 
+                                   self.l,
+                                   self.l_backup,
+                                   self.break_mainline,
+                                   fix_start = True,
+                                   fix_end = True)
+
     # Meshing routine essentially
     def init_spacings(self):
        return np.linspace(0,self.L,self.N)
@@ -244,57 +256,21 @@ class SlacklineSpringModel:
         # The change of position is simply the velocities.
         out[:self.offset] = Z[self.offset:]
 
-        ########################################################
-        # Spring forces
-        ########################################################
-
         np.subtract(pos[1:], pos[:-1], out=self.d_edge)
 
         self.dist_edge_squared = self.d_edge[:,0]**2 + self.d_edge[:,1]**2
         np.sqrt(self.dist_edge_squared, out=self.dist_edge)
 
-        self.stretch[:] = self.dist_edge
-        self.stretch -= self.l
-        self.stretch.clip(min=0, out=self.stretch)
-
-        self.beta[:] = self.k
-        self.beta *= self.stretch
-
-        self.backup[:] = self.dist_edge
-        self.backup -= self.l_backup
-        self.backup.clip(min=0, out=self.backup)
-        self.backup *= self.k_backup
-
-        self.beta += self.backup
-        self.beta[self.break_mainline] = self.backup[self.break_mainline]
-
-        np.divide(
-            self.beta,
-            self.dist_edge,
-            out=self.scale,
-        )
 
         self.F[:] = self.gravity_force
 
-        self.F -= self.d_edge[:-1] * self.scale[:-1, None]
-        self.F += self.d_edge[1:]  * self.scale[1:, None]
+        self.F += self.lineModel.get_net_forces(pos)
 
         #######################################################
         # Kelving Voigt Dampening
         ########################################################
 
-        # if (np.max(vel)>1):
-            # print("break")
-        np.subtract(vel[1:], vel[:-1], out=self.d_vel)
-
-        # < delta vel, delta p > / ||delta p||^2
-        np.sum(self.d_vel * (self.d_edge / self.dist_edge_squared[:,None]), axis=1, out=self.proj_vel)
-
-        self.proj_vel = np.where(np.maximum(self.dist_edge > self.l, np.logical_not(self.break_mainline)), self.proj_vel, 0.0) + np.where(self.dist_edge > self.l_backup, self.proj_vel, 0.0)
-
-        # Subtract force in both directions prev and next.
-        self.F -= self.damp_kelvin_voigt * self.proj_vel[:-1, None] * self.d_edge[:-1]
-        self.F += self.damp_kelvin_voigt * self.proj_vel[1:, None] * self.d_edge[1:]
+        self.F += self.lineModel.get_kelvin_voigt_dampening(vel)
 
         ########################################################
         # Leash pulling on line
@@ -331,20 +307,7 @@ class SlacklineSpringModel:
         # Drag
         ########################################################
 
-        np.sqrt(
-            vel[1:-1,0]**2 +
-            vel[1:-1,1]**2,
-            out=self.vel_norm,
-        )
-
-        # Note that the drag is scaled with length of section to acount for 
-        # the area of this part of the webbing
-        self.drag_coef[:] = self.drag_constant * (self.dist_edge[:-1] + self.dist_edge[1:])
-        
-
-        self.F -= self.drag_coef[:,None] * vel[1:-1] * self.vel_norm[:,None]
-
-
+        self.F += self.lineModel.get_drag_force(vel)
 
         ########################################################
         # Combine all
@@ -725,8 +688,8 @@ class SlacklineSpringModel:
                 Z,
                 self.t0,
                 self.t1,
-                rtol=1e-10,
-                atol=1e-10,
+                rtol=1e-5,
+                atol=1e-5,
             )
             result_backupfall = self.post_process(result_backupfall, skip = 1) # Add postprocessing to result_backupfalls
     
