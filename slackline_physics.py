@@ -69,7 +69,7 @@ class SlacklineSpringModel:
 
     @cached_property
     def with_slackliner(self):
-        return self.N_slackliner > 0
+        return self.N_leash > 0
 
     @cached_property
     def start_main(self):
@@ -81,7 +81,7 @@ class SlacklineSpringModel:
 
     @cached_property 
     def offset(self):
-        return 2*self.N_main + 2*self.N_slackliner
+        return 2*self.N_main + 2*self.N_leash
 
     def init_progress_bar(self):
         # progress bar
@@ -140,7 +140,7 @@ class SlacklineSpringModel:
 
         # Set degrees of freedoms
         self.N_main = N
-        self.N_slackliner = 1
+        self.N_leash = 1
 
         # Setup parameters of numerical model
         self.detect_collision = False
@@ -242,16 +242,10 @@ class SlacklineSpringModel:
 
         out = np.zeros_like(Z)
 
-        pos = Z[:2*self.N].reshape(self.N, 2)
-
-        vel = Z[
-            self.offset:
-            self.offset + 2*self.N
-        ].reshape(self.N, 2)
+        pos, pos_leash, vel, vel_leash, alpha, proj, i_prev, i_next = self.get_pos_and_vel_from_state(Z)
 
         # The change of position is simply the velocities.
         out[:self.offset] = Z[self.offset:]
-
 
         self.F[:] = self.gravity_force
 
@@ -265,19 +259,10 @@ class SlacklineSpringModel:
 
         if self.with_slackliner:
 
-            z_slack = Z[
-                self.start_slackliner:
-                self.start_slackliner+2
-            ]
 
-            proj, dist, i_prev, i_next, alpha = (
-                project_along_y(z_slack, pos)
-            )
-
-            pos_slack = np.array([proj, z_slack])
 
             # Compute net forces in leash
-            F_leash_new = self.leashModel.get_net_forces(pos_slack)
+            F_leash_new = self.leashModel.get_net_forces(pos_leash)
 
             # Use these to act on slackline
             self.F[i_prev-1] += (1-alpha)*F_leash_new[0, :]
@@ -348,6 +333,32 @@ class SlacklineSpringModel:
         F_mag_prev = kl_beta_prev[:] 
     
         return F_mag_prev, dist_prev
+
+    def get_pos_and_vel_from_state(self, Z):
+        pos_line = Z[:2*self.N_main].reshape(self.N_main, 2)
+
+
+        pos_leash = np.zeros((self.N_leash+1, 2))
+        pos_leash[1:, :] = Z[2*self.N_main:2*self.N_main + 2*self.N_leash].reshape(self.N_leash, 2)
+        proj, dist, i_prev, i_next, alpha = (
+                project_along_y(pos_leash[1, :], pos_line)
+                )
+        pos_leash[0, :] = proj
+
+        vel_line = Z[
+            self.offset:
+            self.offset + 2*self.N_main
+        ].reshape(self.N_main, 2)
+
+        vel_leash = np.zeros((self.N_leash, 2))
+        vel_leash[0, :] = (1-alpha)*pos_line[i_prev, :] + alpha*pos_line[i_next, :]
+        vel_leash = Z[
+            self.offset + 2*self.N_main:
+            self.offset + 2*self.N_main + 2*self.N_leash
+        ].reshape(self.N_leash, 2)
+
+        return pos_line, pos_leash, vel_line, vel_leash, alpha, proj, i_prev, i_next
+
 
     def post_process(self, result, skip = 1):
     
