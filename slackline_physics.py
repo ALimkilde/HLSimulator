@@ -205,23 +205,29 @@ class SlacklineSpringModel:
     
         # Update mass of line, as some has been removed
         self.m = self.get_mass_from_l()
+    
+    def spaced_points(self, A, B, N):
+        if N == 1:
+            return np.array([B])
+        return np.linspace(A, B, N)
 
     def get_position_line_and_slackliner(self, pos, walking = False):
+        v = np.zeros((self.N_leash, 2))
         if walking:
-            v = np.array([0, self.slackliner.l_leg])
+            v[:, 1] = self.spaced_points(0, self.slackliner.l_leg, self.N_leash)
         else:
-            v = np.array([0, -self.slackliner.l_leash])
+            v[:, 1] = self.spaced_points(0, -self.slackliner.l_leash, self.N_leash)
 
         y_min = np.min(pos[1::2])
         zslackliner = np.array([self.slackliner.x_coor, y_min]) # Initial guess
         proj, dist, _, _, _ = project_along_y(zslackliner, pos.reshape(self.N, 2) # Project to line
 )
-        p_slacker = proj # set position on line to projection
+        p_slacker = proj[None, :] + v # set position on line to projection
 
         if (pos.size <= self.offset):
-            pos = np.concatenate((pos, p_slacker + v))
+            pos = np.concatenate((pos, p_slacker.ravel()))
         elif (pos.size >= self.offset):
-            pos[self.start_slackliner: self.start_slackliner+2]  = p_slacker + v
+            pos[self.start_slackliner: self.start_slackliner+2]  = p_slacker.ravel()
 
         return pos
 
