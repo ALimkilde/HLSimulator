@@ -178,6 +178,16 @@ class SlacklineSpringModel:
                                    kl_backup = self.kl_backup, 
                                    l_backup = self.l_backup)
 
+        self.leashModel = RopeModel(self.slackliner.l_leash,
+                                    2, #n = 2 for leash
+                                    kl = self.kl_leash,
+                                    l = self.slackliner.l_leash,
+                                    break_mainline = False,
+                                    fix_start = True,
+                                    fix_end = False)
+
+                                    
+
     # Meshing routine essentially
     def init_spacings(self):
        return np.linspace(0,self.L,self.N)
@@ -268,21 +278,25 @@ class SlacklineSpringModel:
                 project_along_y(z_slack, pos)
             )
 
-            d = z_slack - proj
+            pos_slack = np.array([proj, z_slack])
 
-            if dist > self.slackliner.l_leash:
+            # Compute net forces in leash
+            F_leash_new = self.leashModel.get_net_forces(pos_slack)
 
-                beta = (dist-self.slackliner.l_leash)/self.slackliner.l_leash
+            # Use these to act on slackline
+            self.F[i_prev-1] += (1-alpha)*F_leash_new[0, :]
+            self.F[i_next-1] += alpha*F_leash_new[0, :]
 
-                F_leash = (
-                    self.kl_leash
-                    * beta
-                    * d
-                    / dist
-                )
+            # Use them to model slackliner
+            F_slack = self.slackliner.m*self.g + F_leash_new[1, :]
 
-                self.F[i_prev-1] += (1-alpha)*F_leash
-                self.F[i_next-1] += alpha*F_leash
+            i = self.start_slackliner
+
+            out[
+                i+self.offset:
+                i+self.offset+2
+            ] = F_slack/self.slackliner.m
+
 
         ########################################################
         # Drag
@@ -307,39 +321,6 @@ class SlacklineSpringModel:
         # Slackliner equation
         ########################################################
 
-        if self.with_slackliner:
-
-            i = self.start_slackliner
-
-            vel_slack = Z[
-                i+self.offset:
-                i+self.offset+2
-            ]
-
-            vel_norm = np.sqrt(
-                vel_slack[0]**2 +
-                vel_slack[1]**2
-            )
-
-            d = proj - z_slack
-
-            if dist > self.slackliner.l_leash:
-
-                beta = (dist-self.slackliner.l_leash)/self.slackliner.l_leash
-
-                F_slack = (
-                    self.slackliner.m*self.g
-                    + self.kl_leash*beta*d/dist
-                )
-
-            else:
-
-                F_slack = self.slackliner.m*self.g
-
-            out[
-                i+self.offset:
-                i+self.offset+2
-            ] = F_slack/self.slackliner.m
 
         return out
 
