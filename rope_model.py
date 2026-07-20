@@ -30,7 +30,8 @@ class RopeModel:
     def precompute_constants(self):
         # Precompute constants
         self.k = self.kl / self.l
-        self.k_backup = self.kl_backup / self.l_backup
+        if (self.has_backup):
+            self.k_backup = self.kl_backup / self.l_backup
 
         self.drag_constant = (
             0.5 * self.rho_air * self.C_D * (self.webbing_width / 2)
@@ -67,12 +68,12 @@ class RopeModel:
         L,              # Length of rope
         n,              # Number of discretization verticies
         kl, 
-        kl_backup,
         l,
-        l_backup,
         break_mainline,
         fix_start,
-        fix_end
+        fix_end,
+        kl_backup=None,
+        l_backup=None,
     ):
         self.L = L
         self.n = n
@@ -83,6 +84,8 @@ class RopeModel:
         self.break_mainline = break_mainline
         self.fix_start = fix_start
         self.fix_end = fix_end
+
+        self.has_backup = self.l_backup is not None
 
         # ========================================
         # Setup parameters of numerical model
@@ -127,14 +130,15 @@ class RopeModel:
         self.beta[:] = self.k
         self.beta *= self.stretch
 
-        self.backup[:] = self.dist_edge
-        self.backup -= self.l_backup
-        self.backup.clip(min=0, out=self.backup)
-        self.backup *= self.k_backup
+        if (self.has_backup):
+            self.backup[:] = self.dist_edge
+            self.backup -= self.l_backup
+            self.backup.clip(min=0, out=self.backup)
+            self.backup *= self.k_backup
 
-        self.beta += self.backup
-        if after_break: 
-            self.beta[self.break_mainline] = self.backup[self.break_mainline]
+            self.beta += self.backup
+            if after_break: 
+                self.beta[self.break_mainline] = self.backup[self.break_mainline]
 
         np.divide(
             self.beta,

@@ -171,12 +171,12 @@ class SlacklineSpringModel:
         self.lineModel = RopeModel(L, 
                                    N, 
                                    self.kl, 
-                                   self.kl_backup, 
                                    self.l,
-                                   self.l_backup,
                                    self.break_mainline,
                                    fix_start = True,
-                                   fix_end = True)
+                                   fix_end = True,
+                                   kl_backup = self.kl_backup, 
+                                   l_backup = self.l_backup)
 
     # Meshing routine essentially
     def init_spacings(self):
