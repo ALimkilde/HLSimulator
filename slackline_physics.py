@@ -245,7 +245,7 @@ class SlacklineSpringModel:
 
         self.F[:] = self.gravity_force
 
-        self.F += self.lineModel.get_net_forces(pos)
+        self.F += self.lineModel.get_net_forces_free_nodes(pos)
 
         #######################################################
         # Kelving Voigt Dampening
@@ -534,7 +534,7 @@ class SlacklineSpringModel:
         out[-2] = pos[-1,0] - self.L
         out[-1] = pos[-1,1]
     
-        F = self.lineModel.get_net_forces(pos, after_break)
+        F = self.lineModel.get_net_forces_free_nodes(pos, after_break)
     
         masses = self.m.copy()
     
