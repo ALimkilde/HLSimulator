@@ -257,10 +257,6 @@ class SlacklineSpringModel:
 
         self.F += self.lineModel.get_net_forces_free_nodes(pos)
 
-        #######################################################
-        # Kelving Voigt Dampening
-        ########################################################
-
         self.F += self.lineModel.get_kelvin_voigt_dampening(vel)
 
         ########################################################
@@ -352,7 +348,7 @@ class SlacklineSpringModel:
         F_mag_prev = kl_beta_prev[:] 
     
         return F_mag_prev, dist_prev
-    
+
     def post_process(self, result, skip = 1):
     
         #max force in
@@ -397,7 +393,10 @@ class SlacklineSpringModel:
         
                 proj, dist, _, _, _ = project_along_y(zslackliner, pos)
     
-                f_leash[i] = tension(proj, zslackliner, self.kl_leash, self.slackliner.l_leash)
+                pos_slack = np.array([proj, zslackliner])
+                F_leash = self.leashModel.get_net_forces(pos_slack)
+                f_leash[i] = np.linalg.norm(F_leash[-1,:])
+                # f_leash[i] = tension(proj, zslackliner, self.kl_leash, self.slackliner.l_leash)
                 if (i > 0):
                     i_prev = i - 20
                     dt = result["t"][i] - result["t"][i_prev]
