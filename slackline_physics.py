@@ -140,7 +140,7 @@ class SlacklineSpringModel:
 
         # Set degrees of freedoms
         self.N_main = N
-        self.N_leash = 1
+        self.N_leash = 2
 
         # Setup parameters of numerical model
         self.detect_collision = False
@@ -179,7 +179,7 @@ class SlacklineSpringModel:
                                    l_backup = self.l_backup)
 
         self.leashModel = RopeModel(self.slackliner.l_leash,
-                                    2, #n = 2 for leash
+                                    self.N_leash+1, #n = 2 for leash
                                     kl = self.kl_leash,
                                     l = self.slackliner.l_leash,
                                     break_mainline = False,
@@ -214,9 +214,11 @@ class SlacklineSpringModel:
     def get_position_line_and_slackliner(self, pos, walking = False):
         v = np.zeros((self.N_leash, 2))
         if walking:
-            v[:, 1] = self.spaced_points(0, self.slackliner.l_leg, self.N_leash)
+            tmp = self.spaced_points(0, self.slackliner.l_leg, self.N_leash+1)
         else:
-            v[:, 1] = self.spaced_points(0, -self.slackliner.l_leash, self.N_leash)
+            tmp = self.spaced_points(0, -self.slackliner.l_leash, self.N_leash+1)
+
+        v[:, 1] = tmp[1:]
 
         y_min = np.min(pos[1::2])
         zslackliner = np.array([self.slackliner.x_coor, y_min]) # Initial guess
