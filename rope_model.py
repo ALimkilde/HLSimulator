@@ -174,13 +174,30 @@ class RopeModel:
         # < delta vel, delta p > / ||delta p||^2
         np.sum(self.d_vel * (self.d_edge / self.dist_edge_squared[:,None]), axis=1, out=self.proj_vel)
 
-        self.proj_vel = np.where(np.maximum(self.dist_edge > self.l, np.logical_not(self.break_mainline)), self.proj_vel, 0.0) + np.where(self.dist_edge > self.l_backup, self.proj_vel, 0.0)
+        self.proj_vel = np.where(np.maximum(self.dist_edge > self.l, np.logical_not(self.break_mainline)), self.proj_vel, 0.0) 
+
+        if (self.has_backup):
+            self.proj_vel += np.where(self.dist_edge > self.l_backup, self.proj_vel, 0.0)
 
         # Subtract force in both directions prev and next.
-        self.F_free = -self.damp_kelvin_voigt * self.proj_vel[:-1, None] * self.d_edge[:-1]
-        self.F_free += self.damp_kelvin_voigt * self.proj_vel[1:, None] * self.d_edge[1:]
+        F = np.zeros_like(self.F)
+        F[1:] = -self.damp_kelvin_voigt * self.proj_vel[:, None] * self.d_edge
+        F[:-1] += self.damp_kelvin_voigt * self.proj_vel[:, None] * self.d_edge
 
-        return self.F_free
+        return self.F
+
+    
+    def get_kelvin_voigt_dampening_free(self, vel):
+        F = self.get_kelvin_voigt_dampening(vel)
+
+        if (self.fix_start and self.fix_end):
+            return F[1:-1]
+        elif(self.fix_start):
+            return F[1:]
+        elif(self.fix_end):
+            return F[:-1]
+        else:
+            return F
 
 
     def get_drag_force(self, vel):

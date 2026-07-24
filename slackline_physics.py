@@ -147,6 +147,7 @@ class SlacklineSpringModel:
         #TODO : move rtol and atol here!
 
         # Physical parameters
+        self.rho_leash = 0.12
         self.g = np.array([0, -9.82])   # gravitation [m/s^2]
         self.rho_air = 1.225            # [kg/m^3]
         self.C_D = 1.15                 # Drag coeff of rectangle
@@ -181,7 +182,7 @@ class SlacklineSpringModel:
         self.leashModel = RopeModel(self.slackliner.l_leash,
                                     self.N_leash+1, #n = 2 for leash
                                     kl = self.kl_leash,
-                                    l = self.slackliner.l_leash,
+                                    l = self.l_leash,
                                     break_mainline = False,
                                     fix_start = True,
                                     fix_end = False)
@@ -229,7 +230,7 @@ class SlacklineSpringModel:
         if (pos.size <= self.offset):
             pos = np.concatenate((pos, p_slacker.ravel()))
         elif (pos.size >= self.offset):
-            pos[self.start_slackliner: self.start_slackliner+2]  = p_slacker.ravel()
+            pos[self.start_slackliner: self.start_slackliner+2*self.N_leash]  = p_slacker.ravel()
 
         return pos
 
@@ -259,7 +260,7 @@ class SlacklineSpringModel:
 
         self.F += self.lineModel.get_net_forces_free_nodes(pos)
 
-        self.F += self.lineModel.get_kelvin_voigt_dampening(vel)
+        self.F += self.lineModel.get_kelvin_voigt_dampening_free(vel)
 
         ########################################################
         # Leash pulling on line
@@ -283,8 +284,8 @@ class SlacklineSpringModel:
 
             out[
                 i+self.offset:
-                i+self.offset+2
-            ] = F_slack/self.slackliner.m
+                i+self.offset+2*self.N_leash
+            ] = acc_slack.ravel()
 
 
         ########################################################
@@ -305,11 +306,6 @@ class SlacklineSpringModel:
             self.offset+2:
             self.offset+2*(self.N-1)
         ] = acc.ravel()
-
-        ########################################################
-        # Slackliner equation
-        ########################################################
-
 
         return out
 
@@ -358,9 +354,9 @@ class SlacklineSpringModel:
             self.offset + 2*self.N_main
         ].reshape(self.N_main, 2)
 
-        vel_leash = np.zeros((self.N_leash, 2))
-        vel_leash[0, :] = (1-alpha)*pos_line[i_prev, :] + alpha*pos_line[i_next, :]
-        vel_leash = Z[
+        vel_leash = np.zeros((self.N_leash+1, 2))
+        vel_leash[0, :] = (1-alpha)*vel_line[i_prev, :] + alpha*vel_line[i_next, :]
+        vel_leash[1:, :] = Z[
             self.offset + 2*self.N_main:
             self.offset + 2*self.N_main + 2*self.N_leash
         ].reshape(self.N_leash, 2)
@@ -725,6 +721,11 @@ class SlacklineSpringModel:
     
         # Interior node masses (half from each neighbouring interval)
         self.m = self.get_mass_from_l()
+        x_leash = np.linspace(0,self.slackliner.l_leash,self.N_leash+1)
+        self.l_leash = np.diff(x_leash)
+        self.kl_leash = self.kl_leash
+        self.rho_leash = self.rho_leash
+        self.m_leash = self.get_mass_from_l_leash(self.rho_leash, self.l_leash)
     
         self.break_mainline = np.array([self.segs[i].break_mainline for i in self.seg_ids], dtype=bool)
     
@@ -733,6 +734,17 @@ class SlacklineSpringModel:
         interval_mass = self.rho * self.l + self.rho_backup * self.l_backup
         m = 0.5 * (interval_mass[:-1] + interval_mass[1:])
         m += 0.5 * (interval_mass[0] + interval_mass[-1]) / len(m)
+        return m
+
+    # Interior node masses (half from each neighbouring interval)
+    def get_mass_from_l_leash(self, l, rho):
+        interval_mass = rho * l
+        m = np.empty(self.N_leash)
+
+        m[1:] = 0.5 * (interval_mass[:-1] + interval_mass[1:])
+        m += 0.5 * (interval_mass[0] + interval_mass[-1]) / len(m)
+        m[-1] = self.slackliner.m
+
         return m
 
 # TODO move this to a helpers file?

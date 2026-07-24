@@ -9,7 +9,8 @@ class RopePlayer:
     def __init__(self, result, model, fps=60):
 
         self.model = model
-        N = model.N
+        N = self.model.N
+        N_leash = self.model.N_leash
                                
         self.result = result
 
@@ -31,7 +32,7 @@ class RopePlayer:
         self.fig, self.ax = plt.subplots(figsize=(16, 9))
 
         self.ax.set_xlim(-0.05 * self.model.L, 1.05 * self.model.L)
-        self.ax.set_ylim(np.min(result["y"][1:2*N+2:2]), np.max(result["y"][1:2*N+2:2]))
+        self.ax.set_ylim(np.min(result["y"][1:2*N+2*N_leash:2]), np.max(result["y"][1:2*N+2*N_leash:2]))
         self.ax.set_aspect("equal")
         self.ax.grid(True)
 
@@ -64,7 +65,8 @@ class RopePlayer:
         self.draw_frame(0)
 
     def draw_frame(self, display_frame):
-        N = self.model.N
+        N = self.model.N_main
+        N_leash = self.model.N_leash
         i = self.display_idx[display_frame]
     
         Z = self.result["y"][:, i]
@@ -85,10 +87,12 @@ class RopePlayer:
 
         pos = Z[:2*N].reshape(N, 2)
         start_slackliner = 2*N
-        p_slacker = Z[start_slackliner:start_slackliner+2]
+        p_slacker = Z[start_slackliner: start_slackliner + 2]
+        xleash = Z[start_slackliner:start_slackliner+2*N_leash:2]
+        yleash = Z[start_slackliner+1:start_slackliner+2*N_leash:2]
         proj, _, _, _, _ = project_along_y(p_slacker, pos)
-        xs = [proj[0], p_slacker[0]]
-        ys = [proj[1], p_slacker[1]]
+        xs = np.concatenate(([proj[0]], xleash))
+        ys = np.concatenate(([proj[1]], yleash))
 
         self.line_slackliner.set_data(xs, ys)
  
