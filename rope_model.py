@@ -146,23 +146,23 @@ class RopeModel:
             out=self.scale,
         )
 
-        self.F[:,:] = 0.0
-        self.F[1:] = -self.d_edge * self.scale[:, None]
-        self.F[:-1] += self.d_edge * self.scale[:, None]
+        F = np.zeros_like(self.F)
+        F[1:] = -self.d_edge * self.scale[:, None]
+        F[:-1] += self.d_edge * self.scale[:, None]
 
-        return self.F
+        return F
 
     def get_net_forces_free_nodes(self, pos, after_break = True):
-        self.get_net_forces(pos, after_break)
+        F = self.get_net_forces(pos, after_break)
 
         if (self.fix_start and self.fix_end):
-            return self.F[1:-1]
+            return F[1:-1]
         elif(self.fix_start):
-            return self.F[1:]
+            return F[1:]
         elif(self.fix_end):
-            return self.F[:-1]
+            return F[:-1]
         else:
-            return self.F
+            return F
         
 
     # get_net_forces has to be called first TODO maybe refactor that
@@ -174,7 +174,7 @@ class RopeModel:
         # < delta vel, delta p > / ||delta p||^2
         np.sum(self.d_vel * (self.d_edge / self.dist_edge_squared[:,None]), axis=1, out=self.proj_vel)
 
-        self.proj_vel = np.where(np.maximum(self.dist_edge > self.l, np.logical_not(self.break_mainline)), self.proj_vel, 0.0) 
+        self.proj_vel = np.where(np.logical_and(self.dist_edge > self.l, np.logical_not(self.break_mainline)), self.proj_vel, 0.0) 
 
         if (self.has_backup):
             self.proj_vel += np.where(self.dist_edge > self.l_backup, self.proj_vel, 0.0)
@@ -184,7 +184,7 @@ class RopeModel:
         F[1:] = -self.damp_kelvin_voigt * self.proj_vel[:, None] * self.d_edge
         F[:-1] += self.damp_kelvin_voigt * self.proj_vel[:, None] * self.d_edge
 
-        return self.F
+        return F
 
     
     def get_kelvin_voigt_dampening_free(self, vel):
@@ -211,9 +211,9 @@ class RopeModel:
         # the area of this part of the webbing
         self.drag_coef[:] = self.drag_constant * (self.dist_edge[:-1] + self.dist_edge[1:])
 
-        self.F_free = -self.drag_coef[:,None] * vel[1:-1] * self.vel_norm[:,None]
+        F_free = -self.drag_coef[:,None] * vel[1:-1] * self.vel_norm[:,None]
         
-        return self.F_free
+        return F_free
 
 
 if __name__ == "__main__":

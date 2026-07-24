@@ -140,10 +140,10 @@ class SlacklineSpringModel:
 
         # Set degrees of freedoms
         self.N_main = N
-        self.N_leash = 2
+        self.N_leash = 1
 
         # Setup parameters of numerical model
-        self.detect_collision = False
+        self.detect_collision = True
         #TODO : move rtol and atol here!
 
         # Physical parameters
@@ -187,7 +187,8 @@ class SlacklineSpringModel:
                                     fix_start = True,
                                     fix_end = False)
 
-                                    
+        self.leashModel.damp_kelvin_voigt *= 1
+
 
     # Meshing routine essentially
     def init_spacings(self):
@@ -268,17 +269,20 @@ class SlacklineSpringModel:
 
         if self.with_slackliner:
 
-
-
+            F_leash_new = np.zeros((self.N_leash+1, 2))
+            F_leash_new[1:,:] = self.m_leash[:, None]*self.g
             # Compute net forces in leash
-            F_leash_new = self.leashModel.get_net_forces(pos_leash)
+            F_leash_new[:,:] += self.leashModel.get_net_forces(pos_leash)
 
             # Use these to act on slackline
             self.F[i_prev-1] += (1-alpha)*F_leash_new[0, :]
             self.F[i_next-1] += alpha*F_leash_new[0, :]
 
             # Use them to model slackliner
-            F_slack = self.slackliner.m*self.g + F_leash_new[1, :]
+            F_leash_new[1:, :] += self.leashModel.get_kelvin_voigt_dampening_free(vel_leash)
+            # F_leash_new[1:, :] += self.leashModel.get_drag_force(vel_leash)
+
+            acc_slack = F_leash_new[1:, :]/self.m_leash[:, None]
 
             i = self.start_slackliner
 
@@ -304,7 +308,7 @@ class SlacklineSpringModel:
 
         out[
             self.offset+2:
-            self.offset+2*(self.N-1)
+            self.offset+2*(self.N_main-1)
         ] = acc.ravel()
 
         return out
@@ -655,8 +659,8 @@ class SlacklineSpringModel:
             Z,
             self.t0,
             self.t1,
-            rtol=1e-2, #TODO switch to module var
-            atol=1e-2,
+            rtol=1e-5, #TODO switch to module var
+            atol=1e-5,
         )
         result_leashfall = self.post_process(result_leashfall, skip = 1) # Add postprocessing to result_backupfalls
     
@@ -721,6 +725,7 @@ class SlacklineSpringModel:
     
         # Interior node masses (half from each neighbouring interval)
         self.m = self.get_mass_from_l()
+
         x_leash = np.linspace(0,self.slackliner.l_leash,self.N_leash+1)
         self.l_leash = np.diff(x_leash)
         self.kl_leash = self.kl_leash

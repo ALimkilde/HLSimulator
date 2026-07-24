@@ -229,7 +229,7 @@ def main():
 
     model = SlacklineSpringModel(
             L = 100,
-            N = 5,
+            N = 25,
             slackliner = slackliner,
             segs = segs,
             T = 5,
