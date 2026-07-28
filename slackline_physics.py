@@ -639,16 +639,16 @@ class SlacklineSpringModel:
     
         # Simulate backup fall
         result_backupfall = None
-        # if (np.any(self.break_mainline)):
-        #     print("Simulating backup fall:")
-        #     result_backupfall = self.integrate_with_collisions(
-        #         Z,
-        #         self.t0,
-        #         self.t1,
-        #         rtol=1e-5,
-        #         atol=1e-5,
-        #     )
-        #     result_backupfall = self.post_process(result_backupfall, skip = 1) # Add postprocessing to result_backupfalls
+        if (np.any(self.break_mainline)):
+            print("Simulating backup fall:")
+            result_backupfall = self.integrate_with_collisions(
+                Z,
+                self.t0,
+                self.t1,
+                rtol=1e-5,
+                atol=1e-5,
+            )
+            result_backupfall = self.post_process(result_backupfall, skip = 1) # Add postprocessing to result_backupfalls
     
         # Simulate leash fall
         print("Simulating leash fall:")

@@ -249,6 +249,7 @@ def main():
     #     print(table)
 
     plt.plot(result_leashfall["t"], result_leashfall["f_leash"])
+    plt.plot(result_backupfall["t"], result_backupfall["f_leash"])
     plt.xlabel("Time [s]")
     plt.ylabel("Force [N]")
     plt.grid(True)
