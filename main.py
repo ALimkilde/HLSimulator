@@ -233,7 +233,8 @@ def main():
             slackliner = slackliner,
             segs = segs,
             T = 5,
-            pull_webbing = 1
+            tension_kN = 1.5,
+            pull_side = "right",
             )
     
     # TODO split into multiple calls

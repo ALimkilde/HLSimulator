@@ -1,7 +1,7 @@
 import numpy as np
 import math
 from scipy.integrate import solve_ivp
-from scipy.optimize import fsolve
+from scipy.optimize import fsolve, brentq
 from dataclasses import dataclass
 from functools import cached_property
 from tqdm import tqdm
@@ -127,7 +127,9 @@ class SlacklineSpringModel:
         slackliner,     # Stats of a slackliner (weight, leg length, leash_length)
         segs,           # Segmented webbing
         T,              # Length of simulation in [s]
-        pull_webbing,   # Amount of webbing to pull to add tension in [m]
+        pull_webbing = None,   # Amount of webbing to pull to add tension in [m]
+        tension_kN = None,     # Desired standing tension in [kN] (alternative to pull_webbing)
+        pull_side = "right",   # Which anchor side to pull from: "left" or "right"
     ):
         # Inputs
         self.slackliner = slackliner
@@ -163,7 +165,16 @@ class SlacklineSpringModel:
         self.discretize_segments()
 
         # Add tension
-        self.add_tension(pull_webbing, self.n_segs-1)
+        seg_id = self._seg_id_for_side(pull_side)
+
+        if (pull_webbing is None) == (tension_kN is None):
+            raise ValueError("Specify exactly one of pull_webbing or tension_kN")
+
+        if tension_kN is not None:
+            pull_webbing = self._solve_pull_for_tension(tension_kN, seg_id)
+            self.pbar.write(f"Solved pull_webbing = {pull_webbing:.3f}m for target tension {tension_kN}kN")
+
+        self.add_tension(pull_webbing, seg_id)
 
         # Setup
         self.precompute_constants()
@@ -201,13 +212,54 @@ class SlacklineSpringModel:
         if (seg_id >= len(self.segs)):
             print("wrong section for tensioning")
             sys.exit()
-        L_main = np.sum(self.l[self.seg_ids == seg_id])
+        mask = self.seg_ids == seg_id
+        L_main = np.sum(self._l_untensioned[mask])
         alpha = -w/L_main
-        self.l[self.seg_ids == seg_id] = self.l[self.seg_ids == seg_id]*(1+alpha)
-    
+        self.l[mask] = self._l_untensioned[mask]*(1+alpha)
+
         # Update mass of line, as some has been removed
         self.m = self.get_mass_from_l()
-    
+
+    def _seg_id_for_side(self, pull_side):
+        if pull_side == "left":
+            return 0
+        elif pull_side == "right":
+            return self.n_segs - 1
+        raise ValueError(f"pull_side must be 'left' or 'right', got {pull_side!r}")
+
+    def _standing_tension_for_pull(self, w, seg_id):
+        self.add_tension(w, seg_id)
+        self.k = self.kl / self.l  # keep in sync for get_force_from_pos
+
+        rope = RopeModel(self.L, self.N, self.kl, self.l, self.break_mainline,
+                          fix_start=True, fix_end=True,
+                          kl_backup=self.kl_backup, l_backup=self.l_backup)
+
+        pos = self.get_static_position(with_slackliner=False, rope=rope)
+        F_mag, _ = self.get_force_from_pos(pos.reshape(self.N, 2))
+        return np.max(F_mag)
+
+    def _solve_pull_for_tension(self, target_kN, seg_id):
+        target_N = target_kN * 1000
+        L_main = np.sum(self._l_untensioned[self.seg_ids == seg_id])
+
+        def f(w):
+            return self._standing_tension_for_pull(w, seg_id) - target_N
+
+        lo, hi = -0.1 * L_main, 0.1 * L_main
+        while f(lo) > 0 and lo > -0.95 * L_main:
+            lo *= 1.5
+        while f(hi) < 0 and hi < 0.95 * L_main:
+            hi *= 1.5
+
+        if f(lo) > 0 or f(hi) < 0:
+            raise ValueError(
+                f"Target tension {target_kN}kN not reachable by pulling segment "
+                f"{seg_id} within physical limits (tried w in [{lo:.2f}, {hi:.2f}]m)"
+            )
+
+        return brentq(f, lo, hi, xtol=1e-4)
+
     def spaced_points(self, A, B, N):
         if N == 1:
             return np.array([B])
@@ -521,19 +573,20 @@ class SlacklineSpringModel:
     leash_event.direction = 1   # only detect slack -> taut
     
     
-    def static_rhs(self, Z, with_slackliner, after_break):
+    def static_rhs(self, Z, with_slackliner, after_break, rope=None):
+        rope = self.lineModel if rope is None else rope
 
         pos = Z.reshape(self.N,2)
-    
+
         out = np.zeros_like(Z)
 
         out[0] = pos[0,0]
         out[1] = pos[0,1]
-    
+
         out[-2] = pos[-1,0] - self.L
         out[-1] = pos[-1,1]
-    
-        F = self.lineModel.get_net_forces_free_nodes(pos, after_break)
+
+        F = rope.get_net_forces_free_nodes(pos, after_break)
     
         masses = self.m.copy()
     
@@ -564,17 +617,18 @@ class SlacklineSpringModel:
     
         return positions
     
-    def get_static_position(self, 
-                            pos = None, 
-                            with_slackliner = True, 
-                            after_break = False):
+    def get_static_position(self,
+                            pos = None,
+                            with_slackliner = True,
+                            after_break = False,
+                            rope = None):
         if (pos is None):
             w_line = np.sum(self.m) + self.slackliner.m
             pos = self.get_initial_pos_from_tension(T_kN = w_line*9.82/1000)
             # pos = get_initial_pos_from_tension(T_kN = 0.05)
-    
-        sol, info, ier, mesg = fsolve(self.static_rhs, pos, full_output=True, 
-                                      args = (with_slackliner, after_break))
+
+        sol, info, ier, mesg = fsolve(self.static_rhs, pos, full_output=True,
+                                      args = (with_slackliner, after_break, rope))
     
         if (ier != 1):
             print("Static solver could not converge!")
@@ -640,7 +694,7 @@ class SlacklineSpringModel:
         # Simulate backup fall
         result_backupfall = None
         if (np.any(self.break_mainline)):
-            print("Simulating backup fall:")
+            self.pbar.write("Simulating backup fall:")
             result_backupfall = self.integrate_with_collisions(
                 Z,
                 self.t0,
@@ -651,7 +705,7 @@ class SlacklineSpringModel:
             result_backupfall = self.post_process(result_backupfall, skip = 1) # Add postprocessing to result_backupfalls
     
         # Simulate leash fall
-        print("Simulating leash fall:")
+        self.pbar.write("Simulating leash fall:")
         pos = self.get_static_position(with_slackliner = True)
         self.break_mainline[:] = False
     
@@ -725,6 +779,10 @@ class SlacklineSpringModel:
     
         # Interior node masses (half from each neighbouring interval)
         self.m = self.get_mass_from_l()
+
+        # Pristine, untensioned lengths — add_tension scales off this snapshot
+        # so it stays idempotent across repeated calls with different w
+        self._l_untensioned = self.l.copy()
 
         x_leash = np.linspace(0,self.slackliner.l_leash,self.N_leash+1)
         self.l_leash = np.diff(x_leash)
