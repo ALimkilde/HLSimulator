@@ -670,10 +670,10 @@ class SlacklineSpringModel:
         
         f_standing = np.max(F_mag_prev)
         result_leashfall["f_standing"] = f_standing
-        # result_backupfall["f_standing"] = f_standing
+        result_backupfall["f_standing"] = f_standing
     
         result_leashfall["w_line"] = np.sum(self.m)
-        # result_backupfall["w_line"] = np.sum(m)
+        result_backupfall["w_line"] = np.sum(self.m)
     
         return result_leashfall, result_backupfall
     

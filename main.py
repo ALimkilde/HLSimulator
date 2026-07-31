@@ -99,10 +99,10 @@ def plot_static_position(model, pos):
     print(f"Tension = {model.compute_tension_mainline(pos)/1000} kN")
 
 
-def state_at(result, idx, start = False):
+def state_at(model, result, idx, start = False):
     """Extract quantities at one time index."""
 
-    h = result["y"][IDX_HEIGHT, idx] - l_leg
+    h = result["y"][model.start_slackliner + 1, idx] - model.slackliner.l_leg
 
     return {
         "height": h,
@@ -121,7 +121,7 @@ def summarize_results(model, result_leashfall, result_backupfall):
     # ---------------------------------------------------------------
     # Walking (initial state)
     # ---------------------------------------------------------------
-    s = state_at(result_leashfall, 0, start = True)
+    s = state_at(model, result_leashfall, 0, start = True)
 
     w = result_leashfall["w_line"]
     print(f"Weight of line: {w}kg")
@@ -181,7 +181,7 @@ def summarize_results(model, result_leashfall, result_backupfall):
     # ---------------------------------------------------------------
     # Backup fall - settled (final state)
     # ---------------------------------------------------------------
-    s = state_at(result_backupfall, -1)
+    s = state_at(model, result_backupfall, -1)
 
     # rows.append({
     #     "Situation": "Backup fall - settled",
@@ -239,14 +239,13 @@ def main():
     # TODO split into multiple calls
     result_leashfall, result_backupfall = model.simulate()
     
-    # Example
-    # table = summarize_results(model, result_leashfall, result_backupfall)
+    table = summarize_results(model, result_leashfall, result_backupfall)
     # table.to_csv("results_more_tense_dont_detect.csv", index=False)
-    # with pd.option_context(
-    #     "display.max_columns", None,
-    #     "display.width", None,
-    # ):
-    #     print(table)
+    with pd.option_context(
+        "display.max_columns", None,
+        "display.width", None,
+    ):
+        print(table)
 
     plt.plot(result_leashfall["t"], result_leashfall["f_leash"])
     plt.plot(result_backupfall["t"], result_backupfall["f_leash"])
