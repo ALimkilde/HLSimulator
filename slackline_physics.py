@@ -171,6 +171,12 @@ class SlacklineSpringModel:
             pull_webbing = self._solve_pull_for_tension(tension_kN, seg_id)
             print(f"Solved pull_webbing = {pull_webbing:.3f}m for target tension {tension_kN}kN")
 
+        if (pull_webbing < self.slack):
+            sys.exit(
+                f"Line is still slack: {np.sum(self._l_untensioned):.1f}m of webbing on a "
+                f"{self.L}m spot needs at least {self.slack:.2f}m pulled, got {pull_webbing:.2f}m"
+            )
+
         self.add_tension(pull_webbing, seg_id)
 
         # Progress bar
@@ -201,9 +207,17 @@ class SlacklineSpringModel:
         self.leashModel.damp_kelvin_voigt *= 1
 
 
-    # Meshing routine essentially
+    # Meshing routine essentially. Nodes are spread evenly along the webbing, so
+    # spacings is a material coordinate running to the total webbing length,
+    # which may be longer than the spot length L.
     def init_spacings(self):
-       return np.linspace(0,self.L,self.N)
+       return np.linspace(0,sum(s.L_main for s in self.segs),self.N)
+
+    # Webbing that does not fit in the spot. It has to be pulled out before the
+    # line takes any tension, and the static solver only converges once it is
+    @cached_property
+    def slack(self):
+        return max(0.0, np.sum(self._l_untensioned) - self.L)
 
     # Adjust tension by adding/decreasing webbing
     # Add by 2m      : w = -2
@@ -247,12 +261,14 @@ class SlacklineSpringModel:
         def f(w):
             return self._standing_tension_for_pull(w, seg_id) - target_N
 
-        lo, hi = 0.0, 0.1 * L_main
+        # Start from the pull that just takes up the slack - below it the line
+        # hangs slack and the static solver has nothing to converge to
+        lo, hi = self.slack, self.slack + 0.1 * L_main
         F_lo = f(lo) + target_N
         if F_lo > target_N:
             sys.exit(
                 f"Target tension {target_kN}kN is below the standing tension of the "
-                f"untensioned line ({F_lo/1000:.2f}kN), pulling can only increase it"
+                f"line with its slack just taken up ({F_lo/1000:.2f}kN)"
             )
 
         while f(hi) < 0 and hi < 0.95 * L_main:
@@ -615,12 +631,15 @@ class SlacklineSpringModel:
         T_kg = 1000.0/9.82 * T_kN
         mass = self.slackliner.m + np.sum(self.m)
         s = mass * self.L / (4*T_kg)
+
+        # spacings runs along the webbing, the initial guess along the spot
+        x = np.linspace(0, self.L, self.N)
         a = -2*s/self.L
-    
-        y = np.maximum(self.spacings*a, (self.L-self.spacings)*a) 
-    
-        positions = np.column_stack((self.spacings, y)).ravel()
-    
+
+        y = np.maximum(x*a, (self.L-x)*a)
+
+        positions = np.column_stack((x, y)).ravel()
+
         return positions
     
     def get_static_position(self,
@@ -766,11 +785,7 @@ class SlacklineSpringModel:
     
         # Segment boundaries
         bounds = np.array([0.0, *accumulate(s.L_main for s in self.segs)])
-    
-        if (bounds[-1] < x[-1]):
-            print(f" Webbing not long enough. {bounds[-1]}m webbing doesn't bridge the {x[-1]}m gap")
-            sys.exit()
-    
+
         # Segment index for each interval
         self.seg_ids = np.searchsorted(bounds, mid, side="right") - 1
         self.seg_ids = np.clip(self.seg_ids, 0, self.n_segs - 1)
