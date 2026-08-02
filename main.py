@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import time
 import sys
+import yaml
+from pathlib import Path
 from tqdm import tqdm
 
 from slackline_physics import SlacklineSpringModel, Webbing, Segment, Slackliner
@@ -203,20 +205,17 @@ def summarize_results(model, result_leashfall, result_backupfall):
         "Tension - leash (kN)": 2,
     })
 
-# TODO move to data file?
 # Webbings
-pinktube = Webbing(stretch_pct = 15.4,  tension_kN = 5, weight_g_m = 54) 
-joker = Webbing(stretch_pct = 3.6,  tension_kN = 5, weight_g_m = 54) 
-solid = Webbing(stretch_pct = 2.5,  tension_kN = 5, weight_g_m = 50) 
-y2k   = Webbing(stretch_pct = 1.0,  tension_kN = 5, weight_g_m = 33) 
+with open(Path(__file__).parent / "webbings.yaml") as f:
+    webbings = {name: Webbing(**fields) for name, fields in yaml.safe_load(f).items()}
 
 def main():
 
 
-    segs = [ 
-            Segment(joker, solid, 30, 32, True),
-            Segment(joker, solid, 30, 32, False),
-            Segment(joker, solid, 40, 43, False),
+    segs = [
+            Segment(webbings["joker"], webbings["solid"], 30, 32, True),
+            Segment(webbings["joker"], webbings["solid"], 30, 32, False),
+            Segment(webbings["joker"], webbings["solid"], 40, 43, False),
            ]
 
     # Slackliner

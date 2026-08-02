@@ -1,0 +1,8 @@
+# Webbing catalogue. Fields match Webbing in slackline_physics.py:
+#   stretch_pct  stretch at tension_kN [%]
+#   tension_kN   tension the stretch is measured at [kN]
+#   weight_g_m   weight [g/m]
+pinktube: {stretch_pct: 15.4, tension_kN: 5, weight_g_m: 54}
+joker:    {stretch_pct: 3.6,  tension_kN: 5, weight_g_m: 54}
+solid:    {stretch_pct: 2.5,  tension_kN: 5, weight_g_m: 50}
+y2k:      {stretch_pct: 1.0,  tension_kN: 5, weight_g_m: 33}
