@@ -232,6 +232,9 @@ class SlacklineSpringModel:
         alpha = -w/L_main
         self.l[mask] = self._l_untensioned[mask]*(1+alpha)
 
+        # The backup leaves the spot along with the main it is pulled through
+        self.l_backup[mask] = self._l_backup_untensioned[mask]*(1+alpha)
+
         # Update mass of line, as some has been removed
         self.m = self.get_mass_from_l()
 
@@ -805,6 +808,7 @@ class SlacklineSpringModel:
         # Pristine, untensioned lengths — add_tension scales off this snapshot
         # so it stays idempotent across repeated calls with different w
         self._l_untensioned = self.l.copy()
+        self._l_backup_untensioned = self.l_backup.copy()
 
         x_leash = np.linspace(0,self.slackliner.l_leash,self.N_leash+1)
         self.l_leash = np.diff(x_leash)
