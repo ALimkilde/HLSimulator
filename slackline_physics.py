@@ -247,16 +247,21 @@ class SlacklineSpringModel:
         def f(w):
             return self._standing_tension_for_pull(w, seg_id) - target_N
 
-        lo, hi = -0.1 * L_main, 0.1 * L_main
-        while f(lo) > 0 and lo > -0.95 * L_main:
-            lo *= 1.5
+        lo, hi = 0.0, 0.1 * L_main
+        F_lo = f(lo) + target_N
+        if F_lo > target_N:
+            raise ValueError(
+                f"Target tension {target_kN}kN is below the standing tension of the "
+                f"untensioned line ({F_lo/1000:.2f}kN), pulling can only increase it"
+            )
+
         while f(hi) < 0 and hi < 0.95 * L_main:
             hi *= 1.5
 
-        if f(lo) > 0 or f(hi) < 0:
+        if f(hi) < 0:
             raise ValueError(
                 f"Target tension {target_kN}kN not reachable by pulling segment "
-                f"{seg_id} within physical limits (tried w in [{lo:.2f}, {hi:.2f}]m)"
+                f"{seg_id} within physical limits (tried w up to {hi:.2f}m)"
             )
 
         return brentq(f, lo, hi, xtol=1e-4)
