@@ -250,7 +250,7 @@ class SlacklineSpringModel:
         lo, hi = 0.0, 0.1 * L_main
         F_lo = f(lo) + target_N
         if F_lo > target_N:
-            raise ValueError(
+            sys.exit(
                 f"Target tension {target_kN}kN is below the standing tension of the "
                 f"untensioned line ({F_lo/1000:.2f}kN), pulling can only increase it"
             )
@@ -259,7 +259,7 @@ class SlacklineSpringModel:
             hi *= 1.5
 
         if f(hi) < 0:
-            raise ValueError(
+            sys.exit(
                 f"Target tension {target_kN}kN not reachable by pulling segment "
                 f"{seg_id} within physical limits (tried w up to {hi:.2f}m)"
             )
