@@ -209,33 +209,32 @@ def summarize_results(model, result_leashfall, result_backupfall):
 with open(Path(__file__).parent / "webbings.yaml") as f:
     webbings = {name: Webbing(**fields) for name, fields in yaml.safe_load(f).items()}
 
-def main():
+# Simulation settings
+def load_settings(path):
+    with open(path) as f:
+        settings = yaml.safe_load(f)
 
+    segs = [Segment(webbings[s["main"]], webbings[s["backup"]],
+                    s["L_main"], s["L_backup"], s["break_mainline"])
+            for s in settings["segments"]]
 
-    segs = [
-            Segment(webbings["joker"], webbings["solid"], 30, 32, True),
-            Segment(webbings["joker"], webbings["solid"], 30, 32, False),
-            Segment(webbings["joker"], webbings["solid"], 40, 43, False),
-           ]
-
-    # Slackliner
-    slackliner = Slackliner(
-            m = 89, 
-            l_leg = 1.1, 
-            l_leash = 1.3,
-            x_coor = 50,
-            )
+    slackliner = Slackliner(**settings["slackliner"])
 
     model = SlacklineSpringModel(
-            L = 100,
-            N = 25,
             slackliner = slackliner,
             segs = segs,
-            T = 5,
-            tension_kN = 1.5,
-            pull_side = "right",
+            **{k: settings[k] for k in
+               ("L", "N", "T", "tension_kN", "pull_webbing", "pull_side")
+               if k in settings},
             )
-    
+
+    return model, settings.get("plots", True)
+
+
+def main(settings_path):
+
+    model, plots = load_settings(settings_path)
+
     # TODO split into multiple calls
     result_leashfall, result_backupfall = model.simulate()
     
@@ -246,6 +245,16 @@ def main():
         "display.width", None,
     ):
         print(table)
+
+    out = Path(settings_path).with_suffix(".txt")
+    out.write_text(f"# Settings ({settings_path})\n"
+                   f"{Path(settings_path).read_text()}\n"
+                   f"# Results\n"
+                   f"{table.to_string(index=False)}\n")
+    print(f"Wrote {out}")
+
+    if (not plots):
+        return
 
     plt.plot(result_leashfall["t"], result_leashfall["f_leash"])
     plt.plot(result_backupfall["t"], result_backupfall["f_leash"])
@@ -262,4 +271,6 @@ def main():
     plt.show()
 
 if __name__ == "__main__":
-    main()
+    if (len(sys.argv) != 2):
+        sys.exit("usage: main.py <settings.yaml>")
+    main(sys.argv[1])
