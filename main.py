@@ -26,10 +26,11 @@ def state_at(model, result, idx, start = False):
 
     return {
         "height": h,
-        "distance": np.nan,
         "left": result["f_anchor1"][idx] / 1000,   # N -> kN
         "right": result["f_anchor2"][idx] / 1000,
         "leash": result["f_leash"][idx] / 1000,
+        "webbing": result["f_webbing"][idx] / 1000,
+        "backup": bool(result["backup_activated"][idx]),
         "standing": result["f_standing"] / 1000,
     }
 
@@ -47,21 +48,25 @@ def summarize_results(model, result_leashfall, result_backupfall):
     print(f"Weight of line: {w}kg")
 
     rows.append({
-        "Situation": "Standing",
+        "Situation": "Empty line",
         "Slackliner's height (m)": np.nan,
-        "Distance from anchor": np.nan,
         "Tension - left side (kN)": s["standing"],
         "Tension - right side (kN)": s["standing"],
         "Tension - leash (kN)": np.nan,
+        "Max force webbing (kN)": s["standing"],
+        "Pull webbing (m)": model.pull_webbing,
+        "Backup activated": False,
         })
 
     rows.append({
         "Situation": "Walking",
         "Slackliner's height (m)": s["height"],
-        "Distance from anchor": s["distance"],
         "Tension - left side (kN)": s["left"],
         "Tension - right side (kN)": s["right"],
         "Tension - leash (kN)": np.nan,
+        "Max force webbing (kN)": s["webbing"],
+        "Pull webbing (m)": model.pull_webbing,
+        "Backup activated": s["backup"],
     })
 
     # ---------------------------------------------------------------
@@ -71,14 +76,17 @@ def summarize_results(model, result_leashfall, result_backupfall):
     f_a1 = np.max(result_leashfall["f_anchor1"])/1000
     f_a2 = np.max(result_leashfall["f_anchor2"])/1000
     f_leash = np.max(result_leashfall["f_leash"])/1000
+    f_webbing = np.max(result_leashfall["f_webbing"])/1000
 
     rows.append({
         "Situation": "Leash fall",
         "Slackliner's height (m)": h,
-        "Distance from anchor": np.nan,
         "Tension - left side (kN)": f_a1,
         "Tension - right side (kN)": f_a2,
         "Tension - leash (kN)": f_leash,
+        "Max force webbing (kN)": f_webbing,
+        "Pull webbing (m)": model.pull_webbing,
+        "Backup activated": bool(np.any(result_leashfall["backup_activated"])),
     })
 
     # ---------------------------------------------------------------
@@ -88,14 +96,17 @@ def summarize_results(model, result_leashfall, result_backupfall):
     f_a1 = np.max(result_backupfall["f_anchor1"])/1000
     f_a2 = np.max(result_backupfall["f_anchor2"])/1000
     f_leash = np.max(result_backupfall["f_leash"])/1000
+    f_webbing = np.max(result_backupfall["f_webbing"])/1000
 
     rows.append({
         "Situation": "Backup fall",
         "Slackliner's height (m)": h,
-        "Distance from anchor": np.nan,
         "Tension - left side (kN)": f_a1,
         "Tension - right side (kN)": f_a2,
         "Tension - leash (kN)": f_leash,
+        "Max force webbing (kN)": f_webbing,
+        "Pull webbing (m)": model.pull_webbing,
+        "Backup activated": bool(np.any(result_backupfall["backup_activated"])),
     })
 
     # ---------------------------------------------------------------
@@ -117,10 +128,11 @@ def summarize_results(model, result_leashfall, result_backupfall):
     # nicer formatting
     return df.round({
         "Slackliner's height (m)": 2,
-        "Distance from anchor": 2,
         "Tension - left side (kN)": 2,
         "Tension - right side (kN)": 2,
         "Tension - leash (kN)": 2,
+        "Max force webbing (kN)": 2,
+        "Pull webbing (m)": 2,
     })
 
 def save_gif(model, result_leashfall, result_backupfall, out, fps = 25, lead = 3):
@@ -207,11 +219,8 @@ def main(settings_path):
     ):
         print(table)
 
-    out = Path(settings_path).with_suffix(".txt")
-    out.write_text(f"# Settings ({settings_path})\n"
-                   f"{Path(settings_path).read_text()}\n"
-                   f"# Results\n"
-                   f"{table.to_string(index=False)}\n")
+    out = Path(settings_path).with_suffix(".csv")
+    table.to_csv(out, index=False)
     print(f"Wrote {out}")
 
     if (gif):

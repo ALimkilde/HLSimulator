@@ -177,6 +177,7 @@ class SlacklineSpringModel:
                 f"{self.L}m spot needs at least {self.slack:.2f}m pulled, got {pull_webbing:.2f}m"
             )
 
+        self.pull_webbing = pull_webbing
         self.add_tension(pull_webbing, seg_id)
 
         # Progress bar
