@@ -230,6 +230,7 @@ class SlacklineSpringModel:
     def _standing_tension_for_pull(self, w, seg_id):
         self.add_tension(w, seg_id)
         self.k = self.kl / self.l  # keep in sync for get_force_from_pos
+        self.k_backup = self.kl_backup / self.l_backup  # keep in sync for get_force_from_pos
 
         rope = RopeModel(self.L, self.N, self.kl, self.l, self.break_mainline,
                           fix_start=True, fix_end=True,
@@ -382,7 +383,7 @@ class SlacklineSpringModel:
         dist_prev = np.linalg.norm(d_prev, axis=1)
     
         main = self.k * np.maximum(dist_prev - self.l, 0.0) 
-        backup = self.k * np.maximum(dist_prev - self.l_backup, 0.0)
+        backup = self.k_backup * np.maximum(dist_prev - self.l_backup, 0.0)
         
         kl_beta_prev = np.where(
             self.break_mainline,
