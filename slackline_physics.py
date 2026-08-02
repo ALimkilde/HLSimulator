@@ -157,9 +157,6 @@ class SlacklineSpringModel:
         self.kl_leash = 200*1E3         # Spring constant times length - Leash
         self.damp_kelvin_voigt = 2E3      # Kelving Voigt Dampening Coefficient
 
-        # Progress bar
-        self.init_progress_bar()
-
         # Create discretization (mesh)
         self.spacings = self.init_spacings()
         self.discretize_segments()
@@ -172,9 +169,12 @@ class SlacklineSpringModel:
 
         if tension_kN is not None:
             pull_webbing = self._solve_pull_for_tension(tension_kN, seg_id)
-            self.pbar.write(f"Solved pull_webbing = {pull_webbing:.3f}m for target tension {tension_kN}kN")
+            print(f"Solved pull_webbing = {pull_webbing:.3f}m for target tension {tension_kN}kN")
 
         self.add_tension(pull_webbing, seg_id)
+
+        # Progress bar
+        self.init_progress_bar()
 
         # Setup
         self.precompute_constants()
