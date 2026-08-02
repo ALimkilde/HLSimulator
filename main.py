@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import math
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
+from matplotlib.animation import FuncAnimation, PillowWriter
 import time
 import sys
 import yaml
@@ -123,6 +123,47 @@ def summarize_results(model, result_leashfall, result_backupfall):
         "Tension - leash (kN)": 2,
     })
 
+def save_gif(model, result_leashfall, result_backupfall, out, fps = 25, lead = 3):
+    """Write a gif with the leash fall animated above the backup fall.
+
+    The gif starts `lead` seconds before the fall, standing still on the line,
+    so the viewer sees the starting point before anything happens.
+    """
+
+    results = [result_leashfall, result_backupfall]
+    labels = ["Leash fall: ", "Backup fall: "]
+
+    # the animations keep an equal aspect ratio, so a 100m spot is a thin strip
+    fig, axes = plt.subplots(2, 1, figsize=(20, 8), layout="constrained")
+
+    # times before 0 land on the first sample, so the countdown holds the
+    # standing position
+    times = np.arange(-lead, model.t1, 1/fps)
+
+    players = [RopePlayer(r, model, ax=axes[i], times=times, label=labels[i])
+               for i, r in enumerate(results)]
+
+    # same y-range for both animations, so the two falls can be compared
+    N = model.N
+    N_leash = model.N_leash
+    ymin = min(np.min(r["y"][1:2*N+2*N_leash:2]) for r in results)
+    ymax = max(np.max(r["y"][1:2*N+2*N_leash:2]) for r in results)
+    for p in players:
+        p.ax.set_ylim(ymin, ymax)
+
+    def update(k):
+        for p in players:
+            p.draw_frame(k)
+
+    anim = FuncAnimation(fig, update, frames=len(times))
+
+    pbar = tqdm(total=len(times), desc="Writing gif:")
+    anim.save(out, writer=PillowWriter(fps=fps),
+              progress_callback=lambda i, n: pbar.update(1))
+    pbar.close()
+    plt.close(fig)
+
+
 # Webbings
 with open(Path(__file__).parent / "webbings.yaml") as f:
     webbings = {name: Webbing(**fields) for name, fields in yaml.safe_load(f).items()}
@@ -146,12 +187,14 @@ def load_settings(path):
                if k in settings},
             )
 
-    return model, settings.get("plots", True)
+    return model, settings
 
 
 def main(settings_path):
 
-    model, plots = load_settings(settings_path)
+    model, settings = load_settings(settings_path)
+    plots = settings.get("plots", True)
+    gif = settings.get("gif", False)
 
     # TODO split into multiple calls
     result_leashfall, result_backupfall = model.simulate()
@@ -170,6 +213,14 @@ def main(settings_path):
                    f"# Results\n"
                    f"{table.to_string(index=False)}\n")
     print(f"Wrote {out}")
+
+    if (gif):
+        if (result_backupfall is None):
+            print("No backup fall simulated, skipping gif")
+        else:
+            out = Path(gif) if isinstance(gif, str) else Path(settings_path).with_suffix(".gif")
+            save_gif(model, result_leashfall, result_backupfall, out)
+            print(f"Wrote {out}")
 
     if (not plots):
         return

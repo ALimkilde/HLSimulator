@@ -6,21 +6,30 @@ import numpy as np
 from slackline_physics import project_along_y, interpolate
 
 class RopePlayer:
-    def __init__(self, result, model, fps=60):
+    def __init__(self, result, model, fps=60, ax=None, times=None, label=""):
 
         self.model = model
         N = self.model.N
         N_leash = self.model.N_leash
-                               
+
         self.result = result
+        self.label = label
+        self.display_times = times   # shown in the title, may start before t = 0
 
-        display_times = np.arange(result["t"][0],
-                                  result["t"][-1],
-                                  1/fps)
+        if times is None:
+            display_times = np.arange(result["t"][0],
+                                      result["t"][-1],
+                                      1/fps)
 
-        self.display_idx = np.unique(
-            np.searchsorted(result["t"], display_times)
-        )
+            self.display_idx = np.unique(
+                np.searchsorted(result["t"], display_times)
+            )
+        else:
+            # caller-supplied time grid: keep one frame per time, so several
+            # players stay in sync frame by frame
+            self.display_idx = np.clip(
+                np.searchsorted(result["t"], times), 0, len(result["t"]) - 1
+            )
 
         self.Nframes = len(self.display_idx)
 
@@ -29,7 +38,10 @@ class RopePlayer:
         self.playing = False
         self.last_time = None
 
-        self.fig, self.ax = plt.subplots(figsize=(16, 9))
+        if ax is None:
+            self.fig, self.ax = plt.subplots(figsize=(16, 9))
+        else:
+            self.fig, self.ax = ax.figure, ax
 
         self.ax.set_xlim(-0.05 * self.model.L, 1.05 * self.model.L)
         self.ax.set_ylim(np.min(result["y"][1:2*N+2*N_leash:2]), np.max(result["y"][1:2*N+2*N_leash:2]))
@@ -51,16 +63,17 @@ class RopePlayer:
             zorder=10,
         )
 
-        self.fig.canvas.mpl_connect("key_press_event", self.on_key)
+        if ax is None:
+            self.fig.canvas.mpl_connect("key_press_event", self.on_key)
 
-        # timer runs every few ms
-        self.anim = FuncAnimation(
-            self.fig,
-            self.update,
-            interval=1000/fps,
-            cache_frame_data=True,
-            save_count=self.Nframes,
-        )
+            # timer runs every few ms
+            self.anim = FuncAnimation(
+                self.fig,
+                self.update,
+                interval=1000/fps,
+                cache_frame_data=True,
+                save_count=self.Nframes,
+            )
 
         self.draw_frame(0)
 
@@ -102,13 +115,16 @@ class RopePlayer:
         center = N // 2
         self.center_marker.set_data([x[center]], [y[center]])
 
-        t=self.result['t'][i]
+        if self.display_times is None:
+            t = self.result['t'][i]
+        else:
+            t = self.display_times[display_frame]
         f_w = self.result["f_webbing"][i]
         f_a1 = self.result["f_anchor1"][i]
         f_a2 = self.result["f_anchor2"][i]
         f_leash = self.result["f_leash"][i]
         G_l = self.result["G_leash"][i]
-        self.ax.set_title(f"t = {t:.1f}s, F_w = {f_w/1000:.1f}kN, F_l = {f_leash/1000:.1f}kN, G = {G_l:.1f}")
+        self.ax.set_title(f"{self.label}t = {t:.1f}s, F_w = {f_w/1000:.1f}kN, F_l = {f_leash/1000:.1f}kN, G = {G_l:.1f}")
 
         self.fig.canvas.draw_idle()
 
