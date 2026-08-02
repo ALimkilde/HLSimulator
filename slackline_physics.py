@@ -810,7 +810,7 @@ class SlacklineSpringModel:
         self.l_leash = np.diff(x_leash)
         self.kl_leash = self.kl_leash
         self.rho_leash = self.rho_leash
-        self.m_leash = self.get_mass_from_l_leash(self.rho_leash, self.l_leash)
+        self.m_leash = self.get_mass_from_l_leash(self.l_leash, self.rho_leash)
     
         self.break_mainline = np.array([self.segs[i].break_mainline for i in self.seg_ids], dtype=bool)
     
