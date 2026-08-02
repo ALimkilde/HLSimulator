@@ -140,10 +140,15 @@ class RopeModel:
             if after_break: 
                 self.beta[self.break_mainline] = self.backup[self.break_mainline]
 
+        # An edge of zero length carries no tension, but beta/dist_edge is 0/0
+        # there and NaNs the whole state. It happens on the leash whenever the
+        # slackliner starts on the line (l_leg = 0).
+        self.scale[:] = 0.0
         np.divide(
             self.beta,
             self.dist_edge,
             out=self.scale,
+            where=self.dist_edge > 0,
         )
 
         F = np.zeros_like(self.F)
