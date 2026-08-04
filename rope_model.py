@@ -177,17 +177,36 @@ class RopeModel:
         np.subtract(vel[1:], vel[:-1], out=self.d_vel)
 
         # < delta vel, delta p > / ||delta p||^2
-        np.sum(self.d_vel * (self.d_edge / self.dist_edge_squared[:,None]), axis=1, out=self.proj_vel)
+        # Guarded like the spring force: a zero length edge has no direction to
+        # damp along, and this is 0/0 there
+        self.proj_vel[:] = 0.0
+        np.divide(
+            np.sum(self.d_vel * self.d_edge, axis=1),
+            self.dist_edge_squared,
+            out=self.proj_vel,
+            where=self.dist_edge > 0,
+        )
 
         taut = np.logical_and(self.dist_edge > self.l, np.logical_not(self.break_mainline))
         if self.has_backup:
             taut = np.logical_or(taut, self.dist_edge > self.l_backup)
-        self.proj_vel = np.where(taut, self.proj_vel, 0.0) 
+        self.proj_vel = np.where(taut, self.proj_vel, 0.0)
+
+        # Damping per unit length, so that refining the mesh keeps modelling the
+        # same material. self.k = self.kl / self.l does the same for the springs
+        c = self.damp_kelvin_voigt / self.l
+
+        # Webbing cannot push. The dashpot is in parallel with the springs, so cap
+        # it where it would drag the total edge tension, beta + c*proj_vel*dist,
+        # below zero - which happens on any edge unloading faster than damp/(k*l)
+        limit = np.zeros_like(self.proj_vel)
+        np.divide(-self.beta, c * self.dist_edge, out=limit, where=self.dist_edge > 0)
+        np.maximum(self.proj_vel, limit, out=self.proj_vel)
 
         # Subtract force in both directions prev and next.
         F = np.zeros_like(self.F)
-        F[1:] = -self.damp_kelvin_voigt * self.proj_vel[:, None] * self.d_edge
-        F[:-1] += self.damp_kelvin_voigt * self.proj_vel[:, None] * self.d_edge
+        F[1:] = -(c * self.proj_vel)[:, None] * self.d_edge
+        F[:-1] += (c * self.proj_vel)[:, None] * self.d_edge
 
         return F
 
