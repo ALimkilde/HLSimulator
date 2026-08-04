@@ -179,10 +179,10 @@ class RopeModel:
         # < delta vel, delta p > / ||delta p||^2
         np.sum(self.d_vel * (self.d_edge / self.dist_edge_squared[:,None]), axis=1, out=self.proj_vel)
 
-        self.proj_vel = np.where(np.logical_and(self.dist_edge > self.l, np.logical_not(self.break_mainline)), self.proj_vel, 0.0) 
-
-        if (self.has_backup):
-            self.proj_vel += np.where(self.dist_edge > self.l_backup, self.proj_vel, 0.0)
+        taut = np.logical_and(self.dist_edge > self.l, np.logical_not(self.break_mainline))
+        if self.has_backup:
+            taut = np.logical_or(taut, self.dist_edge > self.l_backup)
+        self.proj_vel = np.where(taut, self.proj_vel, 0.0) 
 
         # Subtract force in both directions prev and next.
         F = np.zeros_like(self.F)
