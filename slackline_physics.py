@@ -256,7 +256,11 @@ class SlacklineSpringModel:
                           kl_backup=self.kl_backup, l_backup=self.l_backup)
 
         pos = self.get_static_position(with_slackliner=False, rope=rope)
-        F_mag, _ = self.get_force_from_pos(pos.reshape(self.N, 2))
+
+        # The target is the tension on the intact line: the break happens after
+        # the line is rigged, so it cannot set the pull. The shape above is
+        # solved intact too (get_static_position defaults to after_break=False)
+        F_mag, _ = self.get_force_from_pos(pos.reshape(self.N, 2), after_break=False)
         return np.max(F_mag)
 
     def _solve_pull_for_tension(self, target_kN, seg_id):
@@ -403,22 +407,23 @@ class SlacklineSpringModel:
     
         return np.max(t)
     
-    def get_force_from_pos(self, pos):
+    def get_force_from_pos(self, pos, after_break = True):
         # vectors to previous and next nodes
-        d_prev = pos[:-1,:] - pos[1:,:] 
+        d_prev = pos[:-1,:] - pos[1:,:]
         dist_prev = np.linalg.norm(d_prev, axis=1)
-    
-        main = self.k * np.maximum(dist_prev - self.l, 0.0) 
+
+        main = self.k * np.maximum(dist_prev - self.l, 0.0)
         backup = self.k_backup * np.maximum(dist_prev - self.l_backup, 0.0)
-        
-        kl_beta_prev = np.where(
-            self.break_mainline,
-            backup,
-            main + backup,
-        )
-    
-        F_mag_prev = kl_beta_prev[:] 
-    
+
+        F_mag_prev = main + backup
+
+        if after_break:
+            F_mag_prev = np.where(
+                self.break_mainline,
+                backup,
+                F_mag_prev,
+            )
+
         return F_mag_prev, dist_prev
 
     def get_pos_and_vel_from_state(self, Z):
@@ -659,7 +664,17 @@ class SlacklineSpringModel:
 
         sol, info, ier, mesg = fsolve(self.static_rhs, pos, full_output=True,
                                       args = (with_slackliner, after_break, rope))
-    
+
+        # A slack backup carries no force at all, so a guess hanging above the
+        # answer gives fsolve a flat residual with nothing to follow and it
+        # stalls. Retry from a line sagging well below the answer, where the
+        # backup is taut over its whole length and there is a gradient again.
+        if (ier != 1):
+            sol, info, ier, mesg = fsolve(self.static_rhs,
+                                          self.get_initial_pos_from_tension(T_kN = 0.5),
+                                          full_output=True,
+                                          args = (with_slackliner, after_break, rope))
+
         if (ier != 1):
             print("Static solver could not converge!")
             print("ier:", ier)
