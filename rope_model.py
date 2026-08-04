@@ -96,7 +96,7 @@ class RopeModel:
         self.rho_air = 1.225            # [kg/m^3]
         self.C_D = 1.15                 # Drag coeff of rectangle
         self.webbing_width = 0.0254     # [m]
-        self.damp_kelvin_voigt = 2E3      # Kelving Voigt Dampening Coefficient
+        self.damp_kelvin_voigt = 1E3      # Kelving Voigt Dampening Coefficient
 
         # Setup
         self.precompute_constants()
