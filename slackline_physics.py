@@ -142,6 +142,9 @@ class SlacklineSpringModel:
         # Start time 
         self.t0 = 0
 
+        # Extra damping [1/s], only turned on when settling on the backup
+        self.damp_settle = 0.0
+
         # Set degrees of freedoms
         self.N_main = N
         self.N_leash = 1
@@ -363,6 +366,10 @@ class SlacklineSpringModel:
 
             # Use them to model slackliner
             F_leash_new[1:, :] += self.leashModel.get_kelvin_voigt_dampening_free(vel_leash)
+
+            if self.damp_settle:
+                F_leash_new[1:, :] -= self.damp_settle * self.m_leash[:, None] * vel_leash[1:, :]
+
             # F_leash_new[1:, :] += self.leashModel.get_drag_force(vel_leash)
 
             acc_slack = F_leash_new[1:, :]/self.m_leash[:, None]
@@ -380,6 +387,16 @@ class SlacklineSpringModel:
         ########################################################
 
         self.F += self.lineModel.get_drag_force(vel)
+
+        ########################################################
+        # Extra damping, only on when relaxing towards the settled state. It is
+        # written as an acceleration (hence the mass) so that the whole line and
+        # the slackliner ring down at the same rate, and it is proportional to
+        # the velocity, so it leaves the state it settles on untouched.
+        ########################################################
+
+        if self.damp_settle:
+            self.F -= self.damp_settle * self.m[:, None] * vel[1:-1, :]
 
         ########################################################
         # Combine all
@@ -684,24 +701,38 @@ class SlacklineSpringModel:
     
     # Where the line comes to rest hanging on the backup. The simulation is
     # usually still swinging when it ends, so its last time step is not the
-    # resting state - this solves for the resting state directly, starting from
-    # where the simulation left off.
+    # resting state - keep simulating from there with the damping turned way up,
+    # which brings the line to a stop within a few seconds, and read the resting
+    # state off the end of that. Damping does not move the state it settles on,
+    # only how fast it gets there.
     def get_settled_state(self, result):
-        pos = self.get_static_position(result["y"][:2*self.N, -1],
-                                       with_slackliner = True,
-                                       after_break = True)
+        self.pbar.write("Settling on the backup:")
 
-        F_mag, _ = self.get_force_from_pos(pos.reshape(self.N, 2))
+        self.damp_settle = 5.0
+        relaxed = self.integrate_with_collisions(
+            result["y"][:, -1],
+            0.0,
+            5.0,
+            rtol=1e-5,
+            atol=1e-5,
+        )
+        self.damp_settle = 0.0
 
-        # hangs the slackliner l_leash below the line, on a taut leash
-        pos = self.get_position_line_and_slackliner(pos, walking = False)
+        Z = relaxed["y"][:, -1]
+        pos = Z[:2*self.N].reshape(self.N, 2)
+
+        F_mag, _ = self.get_force_from_pos(pos)
+
+        z_slackliner = Z[self.start_slackliner: self.start_slackliner+2]
+        proj, _, _, _, _ = project_along_y(z_slackliner, pos)
+        F_leash = self.leashModel.get_net_forces(np.array([proj, z_slackliner]))
 
         return {
-            "y": pos[self.start_slackliner + 1],
+            "y": Z[self.start_slackliner + 1],
             "f_anchor1": F_mag[0],
             "f_anchor2": F_mag[-1],
             "f_webbing": np.max(F_mag),
-            "f_leash": self.slackliner.m * -self.g[1],
+            "f_leash": np.linalg.norm(F_leash[-1, :]),
         }
 
     def integrate_with_collisions(self, y0, t0, tf, **solve_kwargs):
