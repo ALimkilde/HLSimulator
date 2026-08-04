@@ -157,7 +157,6 @@ class SlacklineSpringModel:
         self.C_D = 1.15                 # Drag coeff of rectangle
         self.webbing_width = 0.0254     # [m]
         self.kl_leash = 200*1E3         # Spring constant times length - Leash
-        self.damp_kelvin_voigt = 2E3      # Kelving Voigt Dampening Coefficient
 
         # Create discretization (mesh)
         self.spacings = self.init_spacings()
