@@ -130,9 +130,11 @@ class SlacklineSpringModel:
         pull_webbing = None,   # Amount of webbing to pull to add tension in [m]
         tension_kN = None,     # Desired standing tension in [kN] (alternative to pull_webbing)
         pull_side = "right",   # Which anchor side to pull from: "left" or "right"
+        leash_fall_hanging = False, # Start the leash fall hanging beside the line
     ):
         # Inputs
         self.slackliner = slackliner
+        self.leash_fall_hanging = leash_fall_hanging
         self.segs = segs 
         self.L = L
         self.t1 = T
@@ -735,9 +737,15 @@ class SlacklineSpringModel:
     
         # Simulate leash fall
         self.pbar.write("Simulating leash fall:")
-        pos = self.get_static_position(with_slackliner = True)
         self.break_mainline[:] = False
-    
+
+        # Not standing on the line but hanging beside it on a slack leash, so
+        # the line carries no weight until the leash comes tight
+        if self.leash_fall_hanging:
+            pos = self.get_static_position(with_slackliner = False)
+            pos = self.get_position_line_and_slackliner(pos, walking = True)
+            Z = np.concatenate((pos, np.zeros_like(pos)))
+
         result_leashfall = self.integrate_with_collisions(
             Z,
             self.t0,

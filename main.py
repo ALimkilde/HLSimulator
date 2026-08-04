@@ -195,7 +195,8 @@ def load_settings(path):
             slackliner = slackliner,
             segs = segs,
             **{k: settings[k] for k in
-               ("L", "N", "T", "tension_kN", "pull_webbing", "pull_side")
+               ("L", "N", "T", "tension_kN", "pull_webbing", "pull_side",
+                "leash_fall_hanging")
                if k in settings},
             )
 
