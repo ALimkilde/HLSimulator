@@ -667,6 +667,28 @@ class SlacklineSpringModel:
             sys.exit()
         return sol
     
+    # Where the line comes to rest hanging on the backup. The simulation is
+    # usually still swinging when it ends, so its last time step is not the
+    # resting state - this solves for the resting state directly, starting from
+    # where the simulation left off.
+    def get_settled_state(self, result):
+        pos = self.get_static_position(result["y"][:2*self.N, -1],
+                                       with_slackliner = True,
+                                       after_break = True)
+
+        F_mag, _ = self.get_force_from_pos(pos.reshape(self.N, 2))
+
+        # hangs the slackliner l_leash below the line, on a taut leash
+        pos = self.get_position_line_and_slackliner(pos, walking = False)
+
+        return {
+            "y": pos[self.start_slackliner + 1],
+            "f_anchor1": F_mag[0],
+            "f_anchor2": F_mag[-1],
+            "f_webbing": np.max(F_mag),
+            "f_leash": self.slackliner.m * -self.g[1],
+        }
+
     def integrate_with_collisions(self, y0, t0, tf, **solve_kwargs):
         """
         Integrate until tf, applying collisions whenever `leash_event` occurs.
@@ -733,7 +755,8 @@ class SlacklineSpringModel:
                 atol=1e-5,
             )
             result_backupfall = self.post_process(result_backupfall, skip = 1) # Add postprocessing to result_backupfalls
-    
+            result_backupfall["settled"] = self.get_settled_state(result_backupfall)
+
         # Simulate leash fall
         self.pbar.write("Simulating leash fall:")
         self.break_mainline[:] = False

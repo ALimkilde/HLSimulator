@@ -112,16 +112,18 @@ def summarize_results(model, result_leashfall, result_backupfall):
     # ---------------------------------------------------------------
     # Backup fall - settled (final state)
     # ---------------------------------------------------------------
-    s = state_at(model, result_backupfall, -1)
+    s = result_backupfall["settled"]
 
-    # rows.append({
-    #     "Situation": "Backup fall - settled",
-    #     "Slackliner's height (m)": s["height"],
-    #     "Distance from anchor": s["distance"],
-    #     "Tension - left side (kN)": s["left"],
-    #     "Tension - right side (kN)": s["right"],
-    #     "Tension - leash (kN)": np.nan,
-    # })
+    rows.append({
+        "Situation": "Backup fall - settled",
+        "Slackliner's height (m)": s["y"],
+        "Tension - left side (kN)": s["f_anchor1"]/1000,
+        "Tension - right side (kN)": s["f_anchor2"]/1000,
+        "Tension - leash (kN)": s["f_leash"]/1000,
+        "Max force webbing (kN)": s["f_webbing"]/1000,
+        "Pull webbing (m)": model.pull_webbing,
+        "Backup activated": True,
+    })
 
     df = pd.DataFrame(rows)
 
