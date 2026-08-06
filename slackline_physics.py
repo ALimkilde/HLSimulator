@@ -229,7 +229,7 @@ class SlacklineSpringModel:
         # webbing and not through 2.5m of leash. What it does do is add its
         # friction force to every leash reading, and that force is scaled off
         # kl_leash, which is a hardcoded guess.
-        self.leashModel.hyst_tension = 0.0
+        self.leashModel.hyst_friction = 0.0
         self.leashModel.precompute_constants()
 
         self.set_time_step()

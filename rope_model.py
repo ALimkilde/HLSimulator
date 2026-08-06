@@ -37,26 +37,14 @@ class RopeModel:
             0.5 * self.rho_air * self.C_D * (self.webbing_width / 2)
         )
 
-        # The friction slider, per spring. hyst_tension is a fraction of kl, the
-        # tension the webbing carries at 100% strain, so the force the friction
-        # holds does not depend on how finely the line is meshed. stick_max does,
-        # in step with the edges, so that the stretch it takes to reverse a whole
-        # line does not.
-        self.k_hyst = self.hyst_tension * self.kl / (self.hyst_strain * self.l)
-        self.stick_max = self.hyst_strain * self.l
-
-        if (self.has_backup):
-            self.k_hyst_backup = (self.hyst_tension * self.kl_backup
-                                  / (self.hyst_strain * self.l_backup))
-            self.stick_max_backup = self.hyst_strain * self.l_backup
-
-    # The stiffest an edge can get, springs and friction together. Sets the
+    # The stiffest an edge can get, springs and stuck sliders together. Sets the
     # largest frequency the mesh carries, and with it the time step.
     @property
     def stiffest_edge(self):
-        k = self.k + self.k_hyst
+        stuck = 1 + self.hyst_friction / self.hyst_slip
+        k = stuck * self.k
         if (self.has_backup):
-            k = k + self.k_backup + self.k_hyst_backup
+            k = k + stuck * self.k_backup
         return np.max(k)
 
     def preallocate_workspace(self):
@@ -143,12 +131,22 @@ class RopeModel:
         # proportion to frequency, so no single coefficient can suit both the
         # 0.3 Hz fall and the few hundred Hz the mesh rings at.
         #
-        # hyst_tension is the tension the friction holds as a fraction of kl, so
-        # a stiff backup gets proportionally more of it than a soft mainline.
-        # hyst_strain is the stretch it takes to reverse the slider, which only
-        # rounds the corners of the loop; hyst_tension is what sets the damping.
-        self.hyst_tension = 0.006
-        self.hyst_strain = 0.005
+        # hyst_friction is what the slider holds as a fraction of the tension the
+        # spring beside it is carrying - the fibres are pressed together by the
+        # load, so that is what sets how hard they are to slide. Scaling it off
+        # kl instead would make it a property of how little a webbing stretches:
+        # the catalogue runs from 1% to 15% at 5kN, so a stiff y2k would end up
+        # with ten times the friction of a soft pinktube at the same load.
+        #
+        # hyst_slip is how far a slider travels before it lets go, as a fraction
+        # of the stretch it is sitting on. It only rounds the corners of the
+        # loop, and measuring it against the stretch rather than against the rest
+        # length keeps those corners the same shape whatever the webbing is doing
+        # - and keeps a stuck slider's stiffness, hyst_friction/hyst_slip times
+        # the spring's, from growing with the load and dragging the time step
+        # down with it.
+        self.hyst_friction = 0.10
+        self.hyst_slip = 0.10
 
         # Setup
         self.precompute_constants()
@@ -223,32 +221,32 @@ class RopeModel:
             return F
         
 
-    # How much of a spring's stretch its friction is still holding on to. The
-    # slider lets go as soon as it is asked for more than stick_max, and that
-    # clip is the whole model - it is the return map of a perfectly plastic
-    # element, and it needs no velocity and no notion of loading or unloading.
-    def held_by_friction(self, stretch, slip, stick_max):
-        return np.clip(stretch - slip, -stick_max, stick_max)
+    # How far a slider is pushed, as a fraction of how far it can go before it
+    # lets go: -1 and +1 are fully slipping, in between it is stuck. That clip is
+    # the whole model - it is the return map of a perfectly plastic element, and
+    # it needs no velocity and no notion of loading or unloading.
+    def held_by_friction(self, stretch, slip):
+        travel = self.hyst_slip * stretch
 
-    # The tension the friction adds to a spring, which can be either sign.
-    def friction_tension(self, stretch, slip, stick_max, k_hyst, beta):
-        held = k_hyst * self.held_by_friction(stretch, slip, stick_max)
+        held = np.zeros_like(stretch)
+        np.divide(stretch - slip, travel, out=held, where=travel > 0)
 
-        # A slack spring has no tension pressing its fibres together, so nothing
-        # rubs and it carries no friction. A taut one cannot be pulled below zero
-        # tension either, because webbing still cannot push. That cap only bites
-        # under a strain of hyst_tension, far below anything a rigged line sees.
-        return np.where(stretch > 0, np.maximum(held, -beta), 0.0)
+        return np.clip(held, -1.0, 1.0, out=held)
+
+    # The tension the friction adds to a spring, either sign. Being a fraction of
+    # what the spring itself carries makes two guards unnecessary: a slack spring
+    # presses no fibres together and so has nothing to rub, and the friction can
+    # never pull an edge below zero tension, so webbing still cannot push.
+    def friction_tension(self, stretch, slip, beta):
+        return self.hyst_friction * beta * self.held_by_friction(stretch, slip)
 
     # get_net_forces has to be called first
     def get_hysteresis_forces(self, after_break = True):
-        extra = self.friction_tension(self.stretch, self.slip, self.stick_max,
-                                      self.k_hyst, self.k * self.stretch)
+        extra = self.friction_tension(self.stretch, self.slip, self.k * self.stretch)
 
         if (self.has_backup):
             extra_backup = self.friction_tension(
-                self.stretch_backup, self.slip_backup, self.stick_max_backup,
-                self.k_hyst_backup, self.backup)
+                self.stretch_backup, self.slip_backup, self.backup)
 
             if after_break:
                 extra = np.where(self.break_mainline, extra_backup, extra + extra_backup)
@@ -273,19 +271,12 @@ class RopeModel:
     # solver's trials rather than the motion of the line.
     # get_net_forces has to be called first
     def advance_load_history(self):
-        self.slip[:] = self.slipped_to(self.stretch, self.slip, self.stick_max)
+        self.slip[:] = self.slipped_to(self.stretch, self.slip)
         if (self.has_backup):
-            self.slip_backup[:] = self.slipped_to(
-                self.stretch_backup, self.slip_backup, self.stick_max_backup)
+            self.slip_backup[:] = self.slipped_to(self.stretch_backup, self.slip_backup)
 
-    # A spring that has gone slack lets its friction go with it, so it starts
-    # clean when it next comes tight
-    def slipped_to(self, stretch, slip, stick_max):
-        return np.where(
-            stretch > 0,
-            stretch - self.held_by_friction(stretch, slip, stick_max),
-            stretch,
-        )
+    def slipped_to(self, stretch, slip):
+        return stretch * (1 - self.hyst_slip * self.held_by_friction(stretch, slip))
 
     # Let every slider go, so the line carries its springs and nothing else.
     # get_net_forces has to be called first
