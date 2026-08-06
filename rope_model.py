@@ -37,6 +37,28 @@ class RopeModel:
             0.5 * self.rho_air * self.C_D * (self.webbing_width / 2)
         )
 
+        # The friction slider, per spring. hyst_tension is a fraction of kl, the
+        # tension the webbing carries at 100% strain, so the force the friction
+        # holds does not depend on how finely the line is meshed. stick_max does,
+        # in step with the edges, so that the stretch it takes to reverse a whole
+        # line does not.
+        self.k_hyst = self.hyst_tension * self.kl / (self.hyst_strain * self.l)
+        self.stick_max = self.hyst_strain * self.l
+
+        if (self.has_backup):
+            self.k_hyst_backup = (self.hyst_tension * self.kl_backup
+                                  / (self.hyst_strain * self.l_backup))
+            self.stick_max_backup = self.hyst_strain * self.l_backup
+
+    # The stiffest an edge can get, springs and friction together. Sets the
+    # largest frequency the mesh carries, and with it the time step.
+    @property
+    def stiffest_edge(self):
+        k = self.k + self.k_hyst
+        if (self.has_backup):
+            k = k + self.k_backup + self.k_hyst_backup
+        return np.max(k)
+
     def preallocate_workspace(self):
         self.d_edge = np.empty((self.n_edges, 2))
         self.dist_edge_squared = np.empty((self.n_edges, 2))
@@ -51,15 +73,14 @@ class RopeModel:
         self.beta = np.empty(self.n_edges)
         self.scale = np.empty(self.n_edges)
 
-        # Largest stretch seen so far, per edge - the load history the unload
-        # path is anchored to
-        self.s_max = np.zeros(self.n_edges)
-        self.s_max_backup = np.zeros(self.n_edges)
+        # How far each friction slider has slipped - the whole load history
+        self.slip = np.zeros(self.n_edges)
+        self.slip_backup = np.zeros(self.n_edges)
 
-        # Rate of change of the edge lengths, and the low pass of it that says
-        # which way the edge is going
-        self.rate = np.zeros(self.n_edges)
-        self.rate_filtered = np.zeros(self.n_edges)
+        # What each edge is actually carrying, springs and friction together.
+        # The friction is not a function of position, so this is the only place
+        # it can be read off afterwards
+        self.tension = np.zeros(self.n_edges)
 
         self.F = np.zeros((self.n, 2))
         self.F_free = np.zeros((self.n_free, 2))
@@ -109,30 +130,25 @@ class RopeModel:
         self.webbing_width = 0.0254     # [m]
         self.damp_kelvin_voigt = 0.0      # Kelving Voigt Dampening Coefficient
 
-        # Load and unload along different paths. Every edge remembers s_max, the
-        # largest stretch it has ever seen, and anything below that comes back
-        # down a softer curve than it went up, so a load cycle returns less
-        # energy than it took. unload_ratio is how much of the virgin stiffness
-        # is left at the bottom of that curve (1 turns the hysteresis off);
-        # unload_rate [1/s] is the strain rate above which an edge counts as
-        # unloading rather than as standing still.
-        self.unload_ratio = 0.4
-        self.unload_rate = 0.01
-
-        # How sharply the unload path peels away from the virgin one just below
-        # the peak. 1 leaves them tangent there and most of the loop unenclosed;
-        # higher values drop the tension as soon as the edge turns around, which
-        # is what a real unloading curve does and what carries most of the loss.
-        self.unload_exp = 3.0
-
-        # Whether an edge is loading or unloading is read off a low pass of its
-        # stretch rate, with this time constant [s]. Without damping the mesh
-        # rings on undisturbed at a few hundred Hz, and the raw rate changes sign
-        # with the ringing rather than with the fall: the load and the unload
-        # path then get picked at random and the load cycle stops enclosing any
-        # area at all. A hundredth of a second is far below anything the fall
-        # does and far above the ringing.
-        self.unload_tau = 0.01
+        # Damping is the friction of the fibres sliding over each other inside
+        # the weave, modelled as a Jenkins element in parallel with each spring:
+        # a stiffness in series with a slider that lets go once it is asked to
+        # hold more than hyst_tension. Loading leaves the slider pinned, so the
+        # edge carries a little extra tension; reversing has to drag the slider
+        # all the way back before it pins the other way, and that lag is what
+        # opens a hysteresis loop and takes the energy out. See Iwan (1966).
+        #
+        # The loop area does not depend on how fast the cycle is run, which is
+        # what real webbing does and what a dashpot cannot do: a dashpot damps in
+        # proportion to frequency, so no single coefficient can suit both the
+        # 0.3 Hz fall and the few hundred Hz the mesh rings at.
+        #
+        # hyst_tension is the tension the friction holds as a fraction of kl, so
+        # a stiff backup gets proportionally more of it than a soft mainline.
+        # hyst_strain is the stretch it takes to reverse the slider, which only
+        # rounds the corners of the loop; hyst_tension is what sets the damping.
+        self.hyst_tension = 0.006
+        self.hyst_strain = 0.005
 
         # Setup
         self.precompute_constants()
@@ -207,97 +223,78 @@ class RopeModel:
             return F
         
 
-    # The load history: the largest stretch every edge has seen, and the low pass
-    # of its stretch rate. Both have to be advanced once per accepted time step,
-    # which is why the solver takes fixed steps: an adaptive one retries steps and
-    # interpolates between them, and the history would then follow the solver's
-    # trials rather than the motion of the line.
-    # get_hysteresis_forces has to be called first
-    def advance_load_history(self, dt):
-        np.maximum(self.s_max, self.stretch, out=self.s_max)
-        if (self.has_backup):
-            np.maximum(self.s_max_backup, self.stretch_backup, out=self.s_max_backup)
+    # How much of a spring's stretch its friction is still holding on to. The
+    # slider lets go as soon as it is asked for more than stick_max, and that
+    # clip is the whole model - it is the return map of a perfectly plastic
+    # element, and it needs no velocity and no notion of loading or unloading.
+    def held_by_friction(self, stretch, slip, stick_max):
+        return np.clip(stretch - slip, -stick_max, stick_max)
 
-        self.rate_filtered += (dt / self.unload_tau) * (self.rate - self.rate_filtered)
+    # The tension the friction adds to a spring, which can be either sign.
+    def friction_tension(self, stretch, slip, stick_max, k_hyst, beta):
+        held = k_hyst * self.held_by_friction(stretch, slip, stick_max)
 
-    def reset_load_history(self):
-        self.s_max[:] = 0.0
-        self.s_max_backup[:] = 0.0
-        self.rate[:] = 0.0
-        self.rate_filtered[:] = 0.0
-
-    # How far the unload curve sits below the virgin one. Loading follows the
-    # linear spring; unloading follows
-    #     F = k*e * (unload_ratio + (1 - unload_ratio) * (e/s_max)**unload_exp)
-    # which meets the virgin curve at s_max, where the edge turned around, and
-    # runs below it all the way down. It reaches zero at zero stretch, so no edge
-    # is left with a permanent set, and it never goes negative, so the webbing
-    # still cannot push.
-    def unload_drop(self, beta, stretch, s_max):
-        u = np.zeros_like(beta)
-        np.divide(stretch, s_max, out=u, where=s_max > 0)
-
-        # s_max is only advanced at the end of a step, so within a step an edge
-        # climbing to a new maximum sits above it. That is virgin loading, no drop
-        np.clip(u, 0.0, 1.0, out=u)
-
-        return (1 - self.unload_ratio) * (1 - u**self.unload_exp) * beta
+        # A slack spring has no tension pressing its fibres together, so nothing
+        # rubs and it carries no friction. A taut one cannot be pulled below zero
+        # tension either, because webbing still cannot push. That cap only bites
+        # under a strain of hyst_tension, far below anything a rigged line sees.
+        return np.where(stretch > 0, np.maximum(held, -beta), 0.0)
 
     # get_net_forces has to be called first
-    def get_hysteresis_forces(self, vel, after_break = True):
-        np.subtract(vel[1:], vel[:-1], out=self.d_vel)
-
-        # d/dt of the edge length. A zero length edge has no direction to measure
-        # it along, guarded like the spring force
-        self.rate[:] = 0.0
-        np.divide(
-            np.sum(self.d_vel * self.d_edge, axis=1),
-            self.dist_edge,
-            out=self.rate,
-            where=self.dist_edge > 0,
-        )
-
-        if (self.unload_ratio >= 1.0):
-            return np.zeros_like(self.F)
-
-        # 1 while the edge is shortening, 0 while it is lengthening, and a ramp
-        # between the two so that an edge which has stopped moving is back on its
-        # virgin curve - the state the line settles on is then the one it would
-        # settle on with none of this.
-        #
-        # Both the filtered rate and the raw one have to say the edge is
-        # shortening. The filter is what the fall is doing, and on its own it
-        # lags: it would leave the unload path switched on for a few
-        # milliseconds after an edge starts stretching again, and taking tension
-        # away from an edge that is lengthening puts energy in rather than
-        # taking it out. The raw rate is the guard against that.
-        phi = (np.clip(-self.rate_filtered / (self.unload_rate * self.l), 0.0, 1.0)
-               * np.clip(-self.rate / (self.unload_rate * self.l), 0.0, 1.0))
-
-        drop = self.unload_drop(self.k * self.stretch, self.stretch, self.s_max)
+    def get_hysteresis_forces(self, after_break = True):
+        extra = self.friction_tension(self.stretch, self.slip, self.stick_max,
+                                      self.k_hyst, self.k * self.stretch)
 
         if (self.has_backup):
-            drop_backup = self.unload_drop(self.backup, self.stretch_backup,
-                                           self.s_max_backup)
-            if after_break:
-                drop = np.where(self.break_mainline, drop_backup, drop + drop_backup)
-            else:
-                drop += drop_backup
+            extra_backup = self.friction_tension(
+                self.stretch_backup, self.slip_backup, self.stick_max_backup,
+                self.k_hyst_backup, self.backup)
 
-        drop *= phi
+            if after_break:
+                extra = np.where(self.break_mainline, extra_backup, extra + extra_backup)
+            else:
+                extra = extra + extra_backup
+
+        self.tension[:] = self.beta + extra
 
         scale = np.zeros(self.n_edges)
-        np.divide(drop, self.dist_edge, out=scale, where=self.dist_edge > 0)
+        np.divide(extra, self.dist_edge, out=scale, where=self.dist_edge > 0)
 
-        # The opposite sign of the spring force: this takes tension away
+        # Same sign convention as the spring force it sits beside
         F = np.zeros_like(self.F)
-        F[1:] = self.d_edge * scale[:, None]
-        F[:-1] -= self.d_edge * scale[:, None]
+        F[1:] = -self.d_edge * scale[:, None]
+        F[:-1] += self.d_edge * scale[:, None]
 
         return F
 
-    def get_hysteresis_forces_free(self, vel, after_break = True):
-        F = self.get_hysteresis_forces(vel, after_break)
+    # Where each slider has slipped to. Advanced once per accepted time step,
+    # which is why the solver takes fixed steps: an adaptive one retries steps
+    # and interpolates between them, and the sliders would then follow the
+    # solver's trials rather than the motion of the line.
+    # get_net_forces has to be called first
+    def advance_load_history(self):
+        self.slip[:] = self.slipped_to(self.stretch, self.slip, self.stick_max)
+        if (self.has_backup):
+            self.slip_backup[:] = self.slipped_to(
+                self.stretch_backup, self.slip_backup, self.stick_max_backup)
+
+    # A spring that has gone slack lets its friction go with it, so it starts
+    # clean when it next comes tight
+    def slipped_to(self, stretch, slip, stick_max):
+        return np.where(
+            stretch > 0,
+            stretch - self.held_by_friction(stretch, slip, stick_max),
+            stretch,
+        )
+
+    # Let every slider go, so the line carries its springs and nothing else.
+    # get_net_forces has to be called first
+    def relax_friction(self):
+        self.slip[:] = self.stretch
+        self.slip_backup[:] = self.stretch_backup
+
+    def get_hysteresis_forces_free(self, after_break = True):
+        F = self.get_hysteresis_forces(after_break)
 
         if (self.fix_start and self.fix_end):
             return F[1:-1]

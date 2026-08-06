@@ -104,13 +104,15 @@ class SlacklineSpringModel:
             0.5 * self.rho_air * self.C_D * (self.webbing_width / 2)
         )
 
-        # The fixed step the integrator takes. An explicit step is stable up to
-        # dt = 2/omega, and the fastest mode a chain of springs carries is
-        # omega = 2*sqrt(k/m), so the limit is sqrt(m/k) on the stiffest edge -
-        # main and backup both pulling - and this stays well inside it.
+    # The fixed step the integrator takes. An explicit step is stable up to
+    # dt = 2/omega, and the fastest mode a chain of springs carries is
+    # omega = 2*sqrt(k/m), so the limit is sqrt(m/k) on the stiffest edge and
+    # this stays well inside it. Needs the two ropes, so it is set once they are
+    # built - their friction sliders stiffen an edge as well as the springs do.
+    def set_time_step(self):
         self.dt = self.dt_safety * min(
-            np.sqrt(np.min(self.m) / np.max(self.k + self.k_backup)),
-            np.sqrt(np.min(self.m_leash) / np.max(self.kl_leash / self.l_leash)),
+            np.sqrt(np.min(self.m) / self.lineModel.stiffest_edge),
+            np.sqrt(np.min(self.m_leash) / self.leashModel.stiffest_edge),
         )
 
     def preallocate_workspace(self):
@@ -160,7 +162,7 @@ class SlacklineSpringModel:
         # Setup parameters of numerical model
         self.detect_collision = True
 
-        # Safety factor on the fixed time step, see precompute_constants
+        # Safety factor on the fixed time step, see set_time_step
         self.dt_safety = 0.25
 
         # Physical parameters
@@ -220,6 +222,17 @@ class SlacklineSpringModel:
                                     fix_end = False)
 
         self.leashModel.damp_kelvin_voigt *= 1
+
+        # No friction in the leash. A knotted rope certainly has some, but it
+        # damps nothing here - turning it off changes drop 7's ringdown not at
+        # all, because the energy of a fall cycles through the stretch of 45m of
+        # webbing and not through 2.5m of leash. What it does do is add its
+        # friction force to every leash reading, and that force is scaled off
+        # kl_leash, which is a hardcoded guess.
+        self.leashModel.hyst_tension = 0.0
+        self.leashModel.precompute_constants()
+
+        self.set_time_step()
 
 
     # Meshing routine essentially. Nodes are spread evenly along the webbing, so
@@ -357,7 +370,7 @@ class SlacklineSpringModel:
 
         self.F += self.lineModel.get_net_forces_free_nodes(pos)
 
-        self.F += self.lineModel.get_hysteresis_forces_free(vel)
+        self.F += self.lineModel.get_hysteresis_forces_free()
 
         self.F += self.lineModel.get_kelvin_voigt_dampening_free(vel)
 
@@ -371,7 +384,7 @@ class SlacklineSpringModel:
             F_leash_new[1:,:] = self.m_leash[:, None]*self.g
             # Compute net forces in leash
             F_leash_new[:,:] += self.leashModel.get_net_forces(pos_leash)
-            F_leash_new[:,:] += self.leashModel.get_hysteresis_forces(vel_leash)
+            F_leash_new[:,:] += self.leashModel.get_hysteresis_forces()
 
             # Use these to act on slackline
             self.F[i_prev-1] += (1-alpha)*F_leash_new[0, :]
@@ -516,8 +529,13 @@ class SlacklineSpringModel:
             pos = Z[:2*N].reshape(N, 2)
             vel = Z[self.offset:self.offset+2*N].reshape(N, 2)
     
-            F_mag_prev, dist_prev = self.get_force_from_pos(pos)
-    
+            _, dist_prev = self.get_force_from_pos(pos)
+
+            # What the line was carrying, springs and friction together. The
+            # friction does not follow from the positions, so it is the trace
+            # the run recorded rather than anything recomputed here
+            F_mag_prev = result["tension"][:, i]
+
             f_webbing[i] = np.max(F_mag_prev)
             f_anchor1[i] = F_mag_prev[0]
             f_anchor2[i] = F_mag_prev[-1]
@@ -530,9 +548,7 @@ class SlacklineSpringModel:
         
                 proj, dist, _, _, _ = project_along_y(zslackliner, pos)
     
-                pos_slack = np.array([proj, zslackliner])
-                F_leash = self.leashModel.get_net_forces(pos_slack)
-                f_leash[i] = np.linalg.norm(F_leash[-1,:])
+                f_leash[i] = result["tension_leash"][i]
                 # f_leash[i] = tension(proj, zslackliner, self.kl_leash, self.slackliner.l_leash)
                 if (i > 0):
                     i_prev = i - 20
@@ -730,35 +746,37 @@ class SlacklineSpringModel:
             result["y"][:, -1],
             0.0,
             5.0,
+            fresh_line = False,
         )
         self.damp_settle = 0.0
 
         Z = relaxed["y"][:, -1]
-        pos = Z[:2*self.N].reshape(self.N, 2)
 
-        F_mag, _ = self.get_force_from_pos(pos)
-
-        z_slackliner = Z[self.start_slackliner: self.start_slackliner+2]
-        proj, _, _, _, _ = project_along_y(z_slackliner, pos)
-        F_leash = self.leashModel.get_net_forces(np.array([proj, z_slackliner]))
+        # Where the friction was left holding when the line stopped, which is
+        # part of what it rests on
+        F_mag = relaxed["tension"][:, -1]
 
         return {
             "y": Z[self.start_slackliner + 1],
             "f_anchor1": F_mag[0],
             "f_anchor2": F_mag[-1],
             "f_webbing": np.max(F_mag),
-            "f_leash": np.linalg.norm(F_leash[-1, :]),
+            "f_leash": relaxed["tension_leash"][-1],
         }
 
-    def integrate_with_collisions(self, y0, t0, tf):
+    def integrate_with_collisions(self, y0, t0, tf, fresh_line = True):
         """
         Integrate until tf with velocity Verlet at a fixed step, applying
         collisions whenever `leash_event` occurs.
 
-        Fixed steps rather than solve_ivp: the springs carry a load history
-        (s_max on the two RopeModels) that has to be advanced once per accepted
-        step. An adaptive solver retries steps and interpolates between them, so
-        the history would follow its trials instead of the motion of the line.
+        Fixed steps rather than solve_ivp: the friction sliders carry a load
+        history that has to be advanced once per accepted step. An adaptive
+        solver retries steps and interpolates between them, so the sliders would
+        follow its trials instead of the motion of the line.
+
+        The tension is recorded as it goes, because the friction is not a
+        function of position and so cannot be recovered from the trajectory
+        afterwards.
         """
 
         n_steps = max(1, int(math.ceil((tf - t0) / self.dt)))
@@ -766,6 +784,8 @@ class SlacklineSpringModel:
 
         t_all = np.linspace(t0, tf, n_steps + 1)
         y_all = np.empty((len(y0), n_steps + 1))
+        tension = np.zeros((self.lineModel.n_edges, n_steps + 1))
+        tension_leash = np.zeros(n_steps + 1)
 
         Z = np.array(y0, dtype=float)
         y_all[:, 0] = Z
@@ -773,7 +793,17 @@ class SlacklineSpringModel:
         collision_times = []
 
         acc = self.ode_rhs(t0, Z)[self.offset:]
-        self.advance_load_history(dt)
+
+        # A fall starts from a static solve, which has no friction in it, so the
+        # sliders start holding nothing - otherwise the line jumps by the
+        # friction force on the very first step. Carrying an earlier run on
+        # (settling on the backup) keeps the friction it has already built up.
+        if fresh_line:
+            self.relax_friction()
+            acc = self.ode_rhs(t0, Z)[self.offset:]
+
+        self.record_tension(tension, tension_leash, 0)
+        self.advance_load_history()
 
         g = self.leash_event(t0, Z)
 
@@ -786,8 +816,6 @@ class SlacklineSpringModel:
             acc = self.ode_rhs(t, Z)[self.offset:]
             Z[self.offset:] += 0.5 * dt * acc
 
-            self.advance_load_history(dt)
-
             # Slack -> taut, the direction solve_ivp's event was watching
             g, g_prev = self.leash_event(t, Z), g
             if (g_prev < 0 <= g):
@@ -795,21 +823,31 @@ class SlacklineSpringModel:
                 acc = self.ode_rhs(t, Z)[self.offset:]
                 collision_times.append(t)
 
+            self.record_tension(tension, tension_leash, i)
+            self.advance_load_history()
+
             y_all[:, i] = Z
 
         return {
             "t": t_all,
             "y": y_all,
+            "tension": tension,
+            "tension_leash": tension_leash,
             "collision_times": collision_times,
         }
 
-    def advance_load_history(self, dt):
-        self.lineModel.advance_load_history(dt)
-        self.leashModel.advance_load_history(dt)
+    def record_tension(self, tension, tension_leash, i):
+        tension[:, i] = self.lineModel.tension
+        if self.with_slackliner:
+            tension_leash[i] = self.leashModel.tension[0]
 
-    def reset_load_history(self):
-        self.lineModel.reset_load_history()
-        self.leashModel.reset_load_history()
+    def advance_load_history(self):
+        self.lineModel.advance_load_history()
+        self.leashModel.advance_load_history()
+
+    def relax_friction(self):
+        self.lineModel.relax_friction()
+        self.leashModel.relax_friction()
 
     def simulate(self):
         pos = self.get_static_position(with_slackliner = True)
@@ -822,7 +860,6 @@ class SlacklineSpringModel:
         result_backupfall = None
         if (np.any(self.break_mainline)):
             self.pbar.write("Simulating backup fall:")
-            self.reset_load_history()
             result_backupfall = self.integrate_with_collisions(
                 Z,
                 self.t0,
@@ -842,7 +879,6 @@ class SlacklineSpringModel:
             pos = self.get_position_line_and_slackliner(pos, walking = True)
             Z = np.concatenate((pos, np.zeros_like(pos)))
 
-        self.reset_load_history()
         result_leashfall = self.integrate_with_collisions(
             Z,
             self.t0,
