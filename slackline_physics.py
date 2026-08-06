@@ -1,6 +1,5 @@
 import numpy as np
 import math
-from scipy.integrate import solve_ivp
 from scipy.optimize import fsolve, brentq
 from dataclasses import dataclass
 from functools import cached_property
@@ -105,6 +104,15 @@ class SlacklineSpringModel:
             0.5 * self.rho_air * self.C_D * (self.webbing_width / 2)
         )
 
+        # The fixed step the integrator takes. An explicit step is stable up to
+        # dt = 2/omega, and the fastest mode a chain of springs carries is
+        # omega = 2*sqrt(k/m), so the limit is sqrt(m/k) on the stiffest edge -
+        # main and backup both pulling - and this stays well inside it.
+        self.dt = self.dt_safety * min(
+            np.sqrt(np.min(self.m) / np.max(self.k + self.k_backup)),
+            np.sqrt(np.min(self.m_leash) / np.max(self.kl_leash / self.l_leash)),
+        )
+
     def preallocate_workspace(self):
         self.F = np.empty((self.n_masses, 2))
 
@@ -151,7 +159,9 @@ class SlacklineSpringModel:
 
         # Setup parameters of numerical model
         self.detect_collision = True
-        #TODO : move rtol and atol here!
+
+        # Safety factor on the fixed time step, see precompute_constants
+        self.dt_safety = 0.25
 
         # Physical parameters
         self.rho_leash = 0.12
@@ -347,6 +357,8 @@ class SlacklineSpringModel:
 
         self.F += self.lineModel.get_net_forces_free_nodes(pos)
 
+        self.F += self.lineModel.get_hysteresis_forces_free(vel)
+
         self.F += self.lineModel.get_kelvin_voigt_dampening_free(vel)
 
         ########################################################
@@ -359,6 +371,7 @@ class SlacklineSpringModel:
             F_leash_new[1:,:] = self.m_leash[:, None]*self.g
             # Compute net forces in leash
             F_leash_new[:,:] += self.leashModel.get_net_forces(pos_leash)
+            F_leash_new[:,:] += self.leashModel.get_hysteresis_forces(vel_leash)
 
             # Use these to act on slackline
             self.F[i_prev-1] += (1-alpha)*F_leash_new[0, :]
@@ -424,6 +437,10 @@ class SlacklineSpringModel:
     
         return np.max(t)
     
+    # Reads the tension off the virgin curve, with none of the unload path. That
+    # is exact everywhere anything is read from it: an edge turning around sits
+    # on the virgin curve by construction, so every local peak is right, and so
+    # is a line at rest. Only the troughs in between come out too high.
     def get_force_from_pos(self, pos, after_break = True):
         # vectors to previous and next nodes
         d_prev = pos[:-1,:] - pos[1:,:]
@@ -713,8 +730,6 @@ class SlacklineSpringModel:
             result["y"][:, -1],
             0.0,
             5.0,
-            rtol=1e-5,
-            atol=1e-5,
         )
         self.damp_settle = 0.0
 
@@ -735,53 +750,67 @@ class SlacklineSpringModel:
             "f_leash": np.linalg.norm(F_leash[-1, :]),
         }
 
-    def integrate_with_collisions(self, y0, t0, tf, **solve_kwargs):
+    def integrate_with_collisions(self, y0, t0, tf):
         """
-        Integrate until tf, applying collisions whenever `leash_event` occurs.
+        Integrate until tf with velocity Verlet at a fixed step, applying
+        collisions whenever `leash_event` occurs.
+
+        Fixed steps rather than solve_ivp: the springs carry a load history
+        (s_max on the two RopeModels) that has to be advanced once per accepted
+        step. An adaptive solver retries steps and interpolates between them, so
+        the history would follow its trials instead of the motion of the line.
         """
-    
-        t_current = t0
-        y_current = y0
-    
-        t_all = []
-        y_all = []
+
+        n_steps = max(1, int(math.ceil((tf - t0) / self.dt)))
+        dt = (tf - t0) / n_steps
+
+        t_all = np.linspace(t0, tf, n_steps + 1)
+        y_all = np.empty((len(y0), n_steps + 1))
+
+        Z = np.array(y0, dtype=float)
+        y_all[:, 0] = Z
+
         collision_times = []
-    
-        while t_current < tf:
-    
-            sol = solve_ivp(
-                self.ode_rhs,
-                (t_current, tf),
-                y_current,
-                events=self.leash_event,
-                **solve_kwargs
-            )
-    
-            # Append solution (avoid duplicating first point)
-            if len(t_all) == 0:
-                t_all.extend(sol.t)
-                y_all.append(sol.y)
-            else:
-                t_all.extend(sol.t[1:])
-                y_all.append(sol.y[:, 1:])
-    
-            # Finished without another collision
-            if sol.status != 1:
-                break
-    
-            # Collision
-            t_current = sol.t_events[0][0]
-            y_current = self.apply_collision(sol.y_events[0][0])
-            collision_times.append(t_current)
-    
-            # pbar.write(f"Leash started to see tension at t = {t_current:.2f}")
-    
+
+        acc = self.ode_rhs(t0, Z)[self.offset:]
+        self.advance_load_history(dt)
+
+        g = self.leash_event(t0, Z)
+
+        for i in range(1, n_steps + 1):
+            t = t_all[i]
+
+            Z[self.offset:] += 0.5 * dt * acc
+            Z[:self.offset] += dt * Z[self.offset:]
+
+            acc = self.ode_rhs(t, Z)[self.offset:]
+            Z[self.offset:] += 0.5 * dt * acc
+
+            self.advance_load_history(dt)
+
+            # Slack -> taut, the direction solve_ivp's event was watching
+            g, g_prev = self.leash_event(t, Z), g
+            if (g_prev < 0 <= g):
+                Z = self.apply_collision(Z)
+                acc = self.ode_rhs(t, Z)[self.offset:]
+                collision_times.append(t)
+
+            y_all[:, i] = Z
+
         return {
-            "t": np.array(t_all),
-            "y": np.hstack(y_all),
+            "t": t_all,
+            "y": y_all,
             "collision_times": collision_times,
         }
-    
+
+    def advance_load_history(self, dt):
+        self.lineModel.advance_load_history(dt)
+        self.leashModel.advance_load_history(dt)
+
+    def reset_load_history(self):
+        self.lineModel.reset_load_history()
+        self.leashModel.reset_load_history()
+
     def simulate(self):
         pos = self.get_static_position(with_slackliner = True)
     
@@ -793,12 +822,11 @@ class SlacklineSpringModel:
         result_backupfall = None
         if (np.any(self.break_mainline)):
             self.pbar.write("Simulating backup fall:")
+            self.reset_load_history()
             result_backupfall = self.integrate_with_collisions(
                 Z,
                 self.t0,
                 self.t1,
-                rtol=1e-5,
-                atol=1e-5,
             )
             result_backupfall = self.post_process(result_backupfall, skip = 1) # Add postprocessing to result_backupfalls
             result_backupfall["settled"] = self.get_settled_state(result_backupfall)
@@ -814,12 +842,11 @@ class SlacklineSpringModel:
             pos = self.get_position_line_and_slackliner(pos, walking = True)
             Z = np.concatenate((pos, np.zeros_like(pos)))
 
+        self.reset_load_history()
         result_leashfall = self.integrate_with_collisions(
             Z,
             self.t0,
             self.t1,
-            rtol=1e-5, #TODO switch to module var
-            atol=1e-5,
         )
         result_leashfall = self.post_process(result_leashfall, skip = 1) # Add postprocessing to result_backupfalls
     

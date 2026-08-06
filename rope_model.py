@@ -46,9 +46,20 @@ class RopeModel:
         self.proj_vel = np.empty(self.n_edges)
 
         self.stretch = np.empty(self.n_edges)
+        self.stretch_backup = np.zeros(self.n_edges)
         self.backup = np.empty(self.n_edges)
         self.beta = np.empty(self.n_edges)
         self.scale = np.empty(self.n_edges)
+
+        # Largest stretch seen so far, per edge - the load history the unload
+        # path is anchored to
+        self.s_max = np.zeros(self.n_edges)
+        self.s_max_backup = np.zeros(self.n_edges)
+
+        # Rate of change of the edge lengths, and the low pass of it that says
+        # which way the edge is going
+        self.rate = np.zeros(self.n_edges)
+        self.rate_filtered = np.zeros(self.n_edges)
 
         self.F = np.zeros((self.n, 2))
         self.F_free = np.zeros((self.n_free, 2))
@@ -94,9 +105,34 @@ class RopeModel:
         # Physical parameters
         self.g = np.array([0, -9.82])   # gravitation [m/s^2]
         self.rho_air = 1.225            # [kg/m^3]
-        self.C_D = 1.15                 # Drag coeff of rectangle
+        self.C_D = 0.0                  # Drag coeff, off - the load path damps
         self.webbing_width = 0.0254     # [m]
-        self.damp_kelvin_voigt = 1E3      # Kelving Voigt Dampening Coefficient
+        self.damp_kelvin_voigt = 0.0      # Kelving Voigt Dampening Coefficient
+
+        # Load and unload along different paths. Every edge remembers s_max, the
+        # largest stretch it has ever seen, and anything below that comes back
+        # down a softer curve than it went up, so a load cycle returns less
+        # energy than it took. unload_ratio is how much of the virgin stiffness
+        # is left at the bottom of that curve (1 turns the hysteresis off);
+        # unload_rate [1/s] is the strain rate above which an edge counts as
+        # unloading rather than as standing still.
+        self.unload_ratio = 0.4
+        self.unload_rate = 0.01
+
+        # How sharply the unload path peels away from the virgin one just below
+        # the peak. 1 leaves them tangent there and most of the loop unenclosed;
+        # higher values drop the tension as soon as the edge turns around, which
+        # is what a real unloading curve does and what carries most of the loss.
+        self.unload_exp = 3.0
+
+        # Whether an edge is loading or unloading is read off a low pass of its
+        # stretch rate, with this time constant [s]. Without damping the mesh
+        # rings on undisturbed at a few hundred Hz, and the raw rate changes sign
+        # with the ringing rather than with the fall: the load and the unload
+        # path then get picked at random and the load cycle stops enclosing any
+        # area at all. A hundredth of a second is far below anything the fall
+        # does and far above the ringing.
+        self.unload_tau = 0.01
 
         # Setup
         self.precompute_constants()
@@ -134,6 +170,7 @@ class RopeModel:
             self.backup[:] = self.dist_edge
             self.backup -= self.l_backup
             self.backup.clip(min=0, out=self.backup)
+            self.stretch_backup[:] = self.backup
             self.backup *= self.k_backup
 
             self.beta += self.backup
@@ -170,8 +207,113 @@ class RopeModel:
             return F
         
 
+    # The load history: the largest stretch every edge has seen, and the low pass
+    # of its stretch rate. Both have to be advanced once per accepted time step,
+    # which is why the solver takes fixed steps: an adaptive one retries steps and
+    # interpolates between them, and the history would then follow the solver's
+    # trials rather than the motion of the line.
+    # get_hysteresis_forces has to be called first
+    def advance_load_history(self, dt):
+        np.maximum(self.s_max, self.stretch, out=self.s_max)
+        if (self.has_backup):
+            np.maximum(self.s_max_backup, self.stretch_backup, out=self.s_max_backup)
+
+        self.rate_filtered += (dt / self.unload_tau) * (self.rate - self.rate_filtered)
+
+    def reset_load_history(self):
+        self.s_max[:] = 0.0
+        self.s_max_backup[:] = 0.0
+        self.rate[:] = 0.0
+        self.rate_filtered[:] = 0.0
+
+    # How far the unload curve sits below the virgin one. Loading follows the
+    # linear spring; unloading follows
+    #     F = k*e * (unload_ratio + (1 - unload_ratio) * (e/s_max)**unload_exp)
+    # which meets the virgin curve at s_max, where the edge turned around, and
+    # runs below it all the way down. It reaches zero at zero stretch, so no edge
+    # is left with a permanent set, and it never goes negative, so the webbing
+    # still cannot push.
+    def unload_drop(self, beta, stretch, s_max):
+        u = np.zeros_like(beta)
+        np.divide(stretch, s_max, out=u, where=s_max > 0)
+
+        # s_max is only advanced at the end of a step, so within a step an edge
+        # climbing to a new maximum sits above it. That is virgin loading, no drop
+        np.clip(u, 0.0, 1.0, out=u)
+
+        return (1 - self.unload_ratio) * (1 - u**self.unload_exp) * beta
+
+    # get_net_forces has to be called first
+    def get_hysteresis_forces(self, vel, after_break = True):
+        np.subtract(vel[1:], vel[:-1], out=self.d_vel)
+
+        # d/dt of the edge length. A zero length edge has no direction to measure
+        # it along, guarded like the spring force
+        self.rate[:] = 0.0
+        np.divide(
+            np.sum(self.d_vel * self.d_edge, axis=1),
+            self.dist_edge,
+            out=self.rate,
+            where=self.dist_edge > 0,
+        )
+
+        if (self.unload_ratio >= 1.0):
+            return np.zeros_like(self.F)
+
+        # 1 while the edge is shortening, 0 while it is lengthening, and a ramp
+        # between the two so that an edge which has stopped moving is back on its
+        # virgin curve - the state the line settles on is then the one it would
+        # settle on with none of this.
+        #
+        # Both the filtered rate and the raw one have to say the edge is
+        # shortening. The filter is what the fall is doing, and on its own it
+        # lags: it would leave the unload path switched on for a few
+        # milliseconds after an edge starts stretching again, and taking tension
+        # away from an edge that is lengthening puts energy in rather than
+        # taking it out. The raw rate is the guard against that.
+        phi = (np.clip(-self.rate_filtered / (self.unload_rate * self.l), 0.0, 1.0)
+               * np.clip(-self.rate / (self.unload_rate * self.l), 0.0, 1.0))
+
+        drop = self.unload_drop(self.k * self.stretch, self.stretch, self.s_max)
+
+        if (self.has_backup):
+            drop_backup = self.unload_drop(self.backup, self.stretch_backup,
+                                           self.s_max_backup)
+            if after_break:
+                drop = np.where(self.break_mainline, drop_backup, drop + drop_backup)
+            else:
+                drop += drop_backup
+
+        drop *= phi
+
+        scale = np.zeros(self.n_edges)
+        np.divide(drop, self.dist_edge, out=scale, where=self.dist_edge > 0)
+
+        # The opposite sign of the spring force: this takes tension away
+        F = np.zeros_like(self.F)
+        F[1:] = self.d_edge * scale[:, None]
+        F[:-1] -= self.d_edge * scale[:, None]
+
+        return F
+
+    def get_hysteresis_forces_free(self, vel, after_break = True):
+        F = self.get_hysteresis_forces(vel, after_break)
+
+        if (self.fix_start and self.fix_end):
+            return F[1:-1]
+        elif(self.fix_start):
+            return F[1:]
+        elif(self.fix_end):
+            return F[:-1]
+        else:
+            return F
+
+
     # get_net_forces has to be called first TODO maybe refactor that
     def get_kelvin_voigt_dampening(self, vel):
+
+        if (not self.damp_kelvin_voigt):
+            return np.zeros_like(self.F)
 
 
         np.subtract(vel[1:], vel[:-1], out=self.d_vel)
